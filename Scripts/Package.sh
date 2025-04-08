@@ -7,6 +7,17 @@ PROJECT_ROOT=$("$SCRIPT_DIR"/FindProjectRoot.sh)
 cd "$PROJECT_ROOT"
 PROJECT_NAME=$(find . -maxdepth 1 -name "*.uproject" -exec basename {} .uproject \;)
 
+# Parse additional map directories from arguments
+ADDITIONAL_MAP_DIRS=()
+OTHER_ARGS=()
+for arg in "$@"; do
+    if [[ $arg == --map-dir=* ]]; then
+        ADDITIONAL_MAP_DIRS+=("${arg#--map-dir=}")
+    else
+        OTHER_ARGS+=("$arg")
+    fi
+done
+
 export UNREAL_ENGINE_PATH=$("$SCRIPT_DIR"/FindUnreal.sh)
 
 FIND_UPROJECT() {
@@ -62,10 +73,54 @@ fi
 cd "$UNREAL_ENGINE_PATH"
 
 if [ "$TEMPOROS_ENABLED" = "false" ]; then
-  echo "Skipping TempoROS automation build because TempoROS plugin is not enabled"
+  echo "Skipping TempoROS.Automation.csproj build because TempoROS plugin is not enabled"
 else
-  echo "Building TempoROS automation (for custom copy handler)"
-  "$PROJECT_ROOT/Plugins/Tempo/TempoROS/Scripts/BuildAutomation.sh"
+  echo "Building TempoROS.Automation.csproj because TempoROS plugin is enabled"
+  # This whole TempoROS.Automation.csproj project is simply to make a custom copy handler to use during packaging
+  # that properly handles symbolic links in the ROS third party dependencies.
+
+  # Starting in 5.5 we noticed an issue where building our custom TempoROS automation step would fail
+  # frequently (but not always) when invoked through the package command itself. So we build it
+  # manually first, which works consistently.
+  
+  # Get engine release (e.g. 5.4)
+  if [ -f "$UNREAL_ENGINE_PATH/Engine/Intermediate/Build/BuildRules/UE5RulesManifest.json" ]; then
+    RELEASE_WITH_HOTFIX=$(jq -r '.EngineVersion' "$UNREAL_ENGINE_PATH/Engine/Intermediate/Build/BuildRules/UE5RulesManifest.json")
+    RELEASE="${RELEASE_WITH_HOTFIX%.*}"
+  fi
+  
+  # Find dotnet
+  if [[ "$OSTYPE" = "msys" ]]; then
+    DOTNET=$(find ./Engine/Binaries/ThirdParty/DotNet -type f -name dotnet.exe)
+  elif [[ "$OSTYPE" = "darwin"* ]]; then
+    DOTNETS=$(find ./Engine/Binaries/ThirdParty/DotNet -type f -name dotnet)
+    ARCH=$(arch)
+    if [[ "$ARCH" = "arm64" ]]; then
+      DOTNET=$(echo "${DOTNETS[@]}" | grep -E "mac-arm64/dotnet")
+    elif [[ "$ARCH" = "i386" ]]; then
+      DOTNET=$(echo "${DOTNETS[@]}" | grep -E "mac-x64/dotnet")
+    fi
+  elif [[ "$OSTYPE" = "linux-gnu"* ]]; then
+    DOTNETS=$(find ./Engine/Binaries/ThirdParty/DotNet -type f -name dotnet)
+    if [[ "$RELEASE" == "5.4" ]]; then
+      # In UE 5.4 there is only one dotnet on Linux. 5.5 added arm64 support.
+      DOTNET="$DOTNETS"
+    else
+      ARCH=$(arch)
+      if [[ "$ARCH" = "arm64" ]]; then
+        DOTNET=$(echo "${DOTNETS[@]}" | grep -E "linux-arm64/dotnet")
+      elif [[ "$ARCH" = "x86_64" ]]; then
+        DOTNET=$(echo "${DOTNETS[@]}" | grep -E "linux-x64/dotnet")
+      fi
+    fi
+  fi
+  
+  if [ -z ${DOTNET+x} ]; then
+    echo -e "Unable to package. Couldn't find dotnet.\n"
+    exit 1
+  fi
+  
+  eval "$DOTNET" build "$PROJECT_ROOT/Plugins/Tempo/TempoROS/Scripts/TempoROS.Automation.csproj"
 fi
 
 cd "$UNREAL_ENGINE_PATH"
@@ -100,4 +155,9 @@ if [[ "$TARGET_PLATFORM" = "Win64" ]]; then
 else
   cp -r "$PROJECT_ROOT/Saved/Cooked/$TARGET_PLATFORM/$PROJECT_NAME/Metadata" "$PROJECT_ROOT/Packaged"
   cp -r "$PROJECT_ROOT/Saved/Cooked/$TARGET_PLATFORM/$PROJECT_NAME/AssetRegistry.bin" "$PROJECT_ROOT/Packaged"
+fi
+
+# Rename pak chunks by the levels they contain (unless told not to or there are no chunks)
+if [[ $* != *skippakchunkrename* && -d "$PROJECT_ROOT/Packaged/Metadata/ChunkManifest" ]]; then
+  eval "$SCRIPT_DIR"/RenamePakChunks.sh "$PROJECT_ROOT/Packaged" "$PROJECT_ROOT/Packaged/Metadata"
 fi
