@@ -16,7 +16,7 @@ setup(
         "grpcio==1.62.2",
         "curio-compat==1.6.7",
         "asyncio==3.4.3",
-        "protobuf==4.25.3",
+        "protobuf==4.25.8",
         "opencv-python==4.10.0.84",
         "matplotlib==3.9.2",
         "pynput==1.7.7",
