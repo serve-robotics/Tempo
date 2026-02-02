@@ -148,5 +148,5 @@ fi
 
 # Rename pak chunks by the levels they contain (unless told not to or there are no chunks)
 if [[ $* != *skippakchunkrename* && -d "$PROJECT_ROOT/Packaged/Metadata/ChunkManifest" ]]; then
-  eval "$SCRIPT_DIR"/RenamePakChunks.sh "$PROJECT_ROOT/Packaged" "$PROJECT_ROOT/Packaged/Metadata"
+  eval "$SCRIPT_DIR"/RenamePakChunks.sh "$PROJECT_ROOT/Packaged" "$PROJECT_ROOT/Packaged/Metadata" "${ADDITIONAL_MAP_DIRS[@]}"
 fi

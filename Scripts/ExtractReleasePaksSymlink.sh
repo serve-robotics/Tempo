@@ -5,7 +5,6 @@ set -e
 # Extract unique level names from a chunk manifest file
 extract_level_names() {
     local input_file="$1"
-    local additional_dirs=("${@:2}")
     
     while IFS= read -r line; do
         if [[ $line == *"\_Generated_"* ]]; then
@@ -15,17 +14,10 @@ extract_level_names() {
             fi
             # Get everything before \_Generated_
             path=${line%\\_Generated_*}
-            # Get everything after the last \Maps\ 
+            # Get everything after the last \Maps\ or \GeneratedMaps\
             map_section=${path##*\\Maps\\}
-            
-            # If no match found in Maps, check additional directories
             if [[ "$map_section" == "$path" ]]; then
-                # Check additional directories if provided
-                for dir in "${additional_dirs[@]}"; do
-                    if [[ "$map_section" == "$path" ]]; then
-                        map_section=${path##*\\${dir}\\}
-                    fi
-                done
+              map_section=${path##*\\GeneratedMaps\\}
             fi
             # Print the result
             echo "$map_section"
@@ -34,8 +26,8 @@ extract_level_names() {
 }
 
 # Check arguments
-if [ $# -lt 2 ]; then
-  echo "Usage: $0 <Package directory> <Package Metadata directory> [Additional Map Directories...]"
+if [ $# -ne 3 ]; then
+  echo "Usage: $0 <Package directory> <Release directory> <Package Metadata directory>"
   exit 1
 fi
 
@@ -45,13 +37,22 @@ if [ ! -d "$1" ]; then
 fi
 
 if [ ! -d "$2" ]; then
-  echo "Package Metadata directory $2 does not exist"
+  mkdir -p "$2"
+fi
+
+if [ -n "$(ls -A "$2")" ]; then
+  echo "Release directory $2 is not empty"
+  exit 1
+fi
+
+if [ ! -d "$3" ]; then
+  echo "Package Metadata directory $3 does not exist"
   exit 1
 fi
 
 PACKAGE_PATH=$(realpath "$1")
-METADATA_PATH=$(realpath "$2")
-ADDITIONAL_DIRS=("${@:3}")
+RELEASE_PATH=$(realpath "$2")
+METADATA_PATH=$(realpath "$3")
 
 if [ ! -d "$METADATA_PATH/ChunkManifest" ]; then
   echo "ChunkManifest directory not found. Are chunks enabled in the project?"
@@ -67,10 +68,30 @@ if [ ! -d "$PAK_PATH" ]; then
   exit 1
 fi
 
+PLATFORM=""
+if [[ "$OSTYPE" = "msys" ]]; then
+  PLATFORM="Win64"
+elif [[ "$OSTYPE" = "darwin"* ]]; then
+  PLATFORM="Mac"
+elif [[ "$OSTYPE" = "linux-gnu"* ]]; then
+  PLATFORM="Linux"
+else
+  echo "Unsupported platform"
+  exit 1
+fi
+
+RELEASE_PLATFORM_PATH="$RELEASE_PATH/$PLATFORM"
+mkdir -p "$RELEASE_PLATFORM_PATH"
+
+# Create symlinks instead of copying files
+find "$PAK_PATH" -name "pakchunk*" -not -name "*_0_P.*" -exec ln -s {} "$RELEASE_PLATFORM_PATH" \;
+cp -r "$PACKAGE_PATH/Metadata" "$RELEASE_PLATFORM_PATH"
+cp "$PACKAGE_PATH/AssetRegistry.bin" "$RELEASE_PLATFORM_PATH"
+
 # We're interested pak chunk manifest files, which look like pak12345.txt
 MANIFEST_FILES=$(find "$METADATA_PATH/ChunkManifest" -regex ".*pakchunk[0-9]*.txt")
 for MANIFEST_FILE in $MANIFEST_FILES; do
-  LEVELS=$(extract_level_names "$MANIFEST_FILE" "${ADDITIONAL_DIRS[@]}" | tr ' ' -)
+  LEVELS=$(extract_level_names "$MANIFEST_FILE" | tr ' ' -)
   FILENAME=$(basename "$MANIFEST_FILE")
   PAK_NAME="${FILENAME%.*}"
   CHUNK_ID="${PAK_NAME#*pakchunk}"
@@ -80,7 +101,7 @@ for MANIFEST_FILE in $MANIFEST_FILES; do
       echo "Pak chunk $CHUNK_ID has ID > 1000 but no levels"
       continue
     fi
-    # Rename "Level" chunks by their level names
-    find "$PAK_PATH" -name "*pakchunk$CHUNK_ID*" -exec bash -c 'mv "$1" "${1/pakchunk$2/pakchunk-$3}"' _ {} "$CHUNK_ID" "$LEVELS" \;
+    # Rename "Level" chunks back to their original IDs
+    find "$RELEASE_PLATFORM_PATH" -name "*pakchunk-$LEVELS*" -exec bash -c 'mv "$1" "${1/pakchunk-$2/pakchunk$3}"' _ {} "$LEVELS" "$CHUNK_ID" \;
   fi
-done
+done 
