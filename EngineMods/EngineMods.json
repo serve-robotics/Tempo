@@ -13,7 +13,13 @@
       "Patch": [
         "AutomationTool.csproj.patch.1",
         "AutomationUtils/AutomationUtils.Automation.csproj.patch.1",
-        "Gauntlet/Gauntlet.Automation.csproj.patch.1"
+        "Gauntlet/Gauntlet.Automation.csproj.patch.1",
+        "AutomationTool.csproj.patch.2",
+        "AutomationUtils/AutomationUtils.Automation.csproj.patch.2",
+        "Gauntlet/Gauntlet.Automation.csproj.patch.2",
+        "AutomationTool.csproj.patch.3",
+        "AutomationUtils/AutomationUtils.Automation.csproj.patch.3",
+        "Gauntlet/Gauntlet.Automation.csproj.patch.3"
       ]
     },
     {
@@ -27,6 +33,7 @@
       ],
       "Patch": [
         "Configuration/UEBuildTarget.cs.patch.1",
+        "Configuration/UEBuildTarget.cs.patch.2",
         "Platform/Linux/LinuxToolChain.cs.patch.1"
       ]
     },
@@ -51,6 +58,14 @@
         "MassCrowd.patch.2",
         "MassCrowd.patch.3",
         "MassCrowd.patch.4"
+      ]
+    },
+    {
+      "Type": "Plugin",
+      "Root": "Engine/Plugins/PCG",
+      "Patch": [
+        "PCG.patch.1",
+        "PCG.patch.2"
       ]
     }
   ],
