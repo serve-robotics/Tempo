@@ -5,9 +5,35 @@
 #include "TempoSensorsSettings.h"
 #include "TempoSensorsShared.h"
 
+#include "TempoSensorsShared/Common.pb.h"
+
 #include "TempoCoreSettings.h"
 
 #include "Engine/TextureRenderTarget2D.h"
+#include "Kismet/GameplayStatics.h"
+
+#if RHI_RAYTRACING && ENGINE_MAJOR_VERSION == 5 && ((ENGINE_MINOR_VERSION == 5 && STATS) || ENGINE_MINOR_VERSION > 5)
+// Hack to get access to private members of FRayTracingScene. See comment in UpdateSceneCaptureContents for more detail.
+#define private public
+#include "RayTracing/RayTracingScene.h"
+#include "ScenePrivate.h"
+#endif
+
+void FTextureRead::ExtractMeasurementHeader(float TransmissionTime, TempoSensorsShared::MeasurementHeader* MeasurementHeaderOut) const
+{
+	MeasurementHeaderOut->set_sequence_id(SequenceId);
+	MeasurementHeaderOut->set_capture_time(CaptureTime);
+	MeasurementHeaderOut->set_transmission_time(TransmissionTime);
+	MeasurementHeaderOut->set_sensor_name(TCHAR_TO_UTF8(*FString::Printf(TEXT("%s/%s"), *OwnerName, *SensorName)));
+	const FVector SensorLocation = QuantityConverter<CM2M, L2R>::Convert(SensorTransform.GetLocation());
+	const FRotator SensorRotation = QuantityConverter<Deg2Rad, L2R>::Convert(SensorTransform.Rotator());
+	MeasurementHeaderOut->mutable_sensor_transform()->mutable_location()->set_x(SensorLocation.X);
+	MeasurementHeaderOut->mutable_sensor_transform()->mutable_location()->set_y(SensorLocation.Y);
+	MeasurementHeaderOut->mutable_sensor_transform()->mutable_location()->set_z(SensorLocation.Z);
+	MeasurementHeaderOut->mutable_sensor_transform()->mutable_rotation()->set_p(SensorRotation.Pitch);
+	MeasurementHeaderOut->mutable_sensor_transform()->mutable_rotation()->set_r(SensorRotation.Roll);
+	MeasurementHeaderOut->mutable_sensor_transform()->mutable_rotation()->set_y(SensorRotation.Yaw);
+}
 
 UTempoSceneCaptureComponent2D::UTempoSceneCaptureComponent2D()
 {
@@ -20,16 +46,77 @@ UTempoSceneCaptureComponent2D::UTempoSceneCaptureComponent2D()
 	bAlwaysPersistRenderingState = true;
 }
 
-void UTempoSceneCaptureComponent2D::BeginPlay()
+void UTempoSceneCaptureComponent2D::Activate(bool bReset)
 {
-	Super::BeginPlay();
+	Super::Activate(bReset);
 
+	InitRenderTarget();
 	RestartCaptureTimer();
 }
 
+void UTempoSceneCaptureComponent2D::Deactivate()
+{
+	Super::Deactivate();
+
+	GetWorld()->GetTimerManager().ClearTimer(TimerHandle);
+	TextureReadQueue.Empty();
+}
+
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 6
 void UTempoSceneCaptureComponent2D::UpdateSceneCaptureContents(FSceneInterface* Scene)
+#else
+void UTempoSceneCaptureComponent2D::UpdateSceneCaptureContents(FSceneInterface* Scene, ISceneRenderBuilder& SceneRenderBuilder)
+#endif
 {
 	TextureInitFence.Wait();
+
+// FRayTracingScene includes buffers, StatsReadbackBuffers and FeedbackReadback, of fixed size.
+// When only rendering the main viewport the default size (4) is sufficient.
+// But when running potentially many scene captures per frame they can easily be overrun, leading to reuse of in-use readbacks and crashes.
+// Here we are "hacking" into the persistent RayTracingScene of the scene and increasing the size of these buffers.
+#if RHI_RAYTRACING && ENGINE_MAJOR_VERSION == 5 && ((ENGINE_MINOR_VERSION == 5 && STATS) || ENGINE_MINOR_VERSION > 5)
+	const UTempoSensorsSettings* TempoSensorsSettings = GetDefault<UTempoSensorsSettings>();
+	if (TempoSensorsSettings && TempoSensorsSettings->GetRayTracingSceneReadbackBuffersOverrunWorkaroundEnabled())
+	{
+		const uint32 NewMaxReadbackBuffers = TempoSensorsSettings->GetRayTracingSceneMaxReadbackBuffersOverride();
+		FRayTracingScene* RayTracingScene = &Scene->GetRenderScene()->RayTracingScene;
+		if (RayTracingScene->MaxReadbackBuffers < NewMaxReadbackBuffers)
+		{
+			// MaxReadbackBuffers is not only private but const, so we need an additional trick.
+			size_t MaxReadbackBuffersOffset = offsetof(FRayTracingScene, MaxReadbackBuffers);
+			*(reinterpret_cast<char*>(RayTracingScene) + MaxReadbackBuffersOffset) = NewMaxReadbackBuffers;
+		}
+
+		const uint32 PrevStatsReadbackBuffersSize = RayTracingScene->StatsReadbackBuffers.Num();
+		if (PrevStatsReadbackBuffersSize < NewMaxReadbackBuffers)
+		{
+			RayTracingScene->StatsReadbackBuffers.SetNum(NewMaxReadbackBuffers);
+			for (uint32 Index = PrevStatsReadbackBuffersSize; Index < NewMaxReadbackBuffers; ++Index)
+			{
+				RayTracingScene->StatsReadbackBuffers[Index] = new FRHIGPUBufferReadback(TEXT("FRayTracingScene::StatsReadbackBuffer"));
+			}
+		}
+
+		// FeedbackReadback added in 5.6
+#if ENGINE_MINOR_VERSION > 5
+		const uint32 PrevFeedbackReadbackBuffersSize = RayTracingScene->FeedbackReadback.Num();
+		if (PrevFeedbackReadbackBuffersSize < NewMaxReadbackBuffers)
+		{
+			RayTracingScene->FeedbackReadback.SetNum(NewMaxReadbackBuffers);
+			for (uint32 Index = PrevFeedbackReadbackBuffersSize; Index < NewMaxReadbackBuffers; ++Index)
+			{
+				RayTracingScene->FeedbackReadback[Index].GeometryHandleReadbackBuffer = new FRHIGPUBufferReadback(TEXT("FRayTracingScene::FeedbackReadbackBuffer::GeometryHandles"));
+				RayTracingScene->FeedbackReadback[Index].GeometryCountReadbackBuffer = new FRHIGPUBufferReadback(TEXT("FRayTracingScene::FeedbackReadbackBuffer::GeometryCount"));			
+			}
+		}
+#endif
+	}
+#endif
+
+	if (!TextureTarget)
+	{
+		return;
+	}
 
 	if (TextureTarget->SizeX != SizeXY.X || TextureTarget->SizeY != SizeXY.Y)
 	{
@@ -48,11 +135,15 @@ void UTempoSceneCaptureComponent2D::UpdateSceneCaptureContents(FSceneInterface* 
 	const int32 MaxTextureQueueSize = GetMaxTextureQueueSize();
 	if (MaxTextureQueueSize > 0 && TextureReadQueue.Num() > MaxTextureQueueSize)
 	{
-		UE_LOG(LogTempoSensorsShared, Warning, TEXT("Fell behind while reading frames from sensor %s owner %s. Skipping capture."), *GetSensorName(), *GetOwnerName());
+		UE_LOG(LogTempoSensorsShared, Warning, TEXT("Fell behind while reading frames from sensor %s. Skipping capture."), *GetName());
 		return;
 	}
 
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 6
 	Super::UpdateSceneCaptureContents(Scene);
+#else
+	Super::UpdateSceneCaptureContents(Scene, SceneRenderBuilder);
+#endif
 	
 	ENQUEUE_RENDER_COMMAND(SetTempoSceneCaptureRenderFence)(
 	[this](FRHICommandList& RHICmdList)
@@ -69,24 +160,12 @@ void UTempoSceneCaptureComponent2D::UpdateSceneCaptureContents(FSceneInterface* 
 	TextureReadQueue.Enqueue(MakeTextureRead());
 }
 
-FString UTempoSceneCaptureComponent2D::GetOwnerName() const
-{
-	check(GetOwner());
-
-	return GetOwner()->GetActorNameOrLabel();
-}
-
-FString UTempoSceneCaptureComponent2D::GetSensorName() const
-{
-	return GetName();
-}
-
-bool UTempoSceneCaptureComponent2D::IsAwaitingRender()
+bool UTempoSceneCaptureComponent2D::IsNextReadAwaitingRender() const
 {
 	return TextureReadQueue.IsNextAwaitingRender();
 }
 
-void UTempoSceneCaptureComponent2D::OnRenderCompleted()
+void UTempoSceneCaptureComponent2D::ReadNextIfAvailable()
 {
 	if (!TextureReadQueue.IsNextAwaitingRender() || !RenderFence.IsValid())
 	{
@@ -119,23 +198,33 @@ void UTempoSceneCaptureComponent2D::OnRenderCompleted()
 	TextureReadQueue.ReadNext(RenderTarget, TextureRHICopy);
 }
 
-void UTempoSceneCaptureComponent2D::BlockUntilMeasurementsReady() const
+void UTempoSceneCaptureComponent2D::BlockUntilNextReadComplete() const
 {
 	TextureReadQueue.BlockUntilNextReadComplete();
 }
 
-TOptional<TFuture<void>> UTempoSceneCaptureComponent2D::SendMeasurements()
+TUniquePtr<FTextureRead> UTempoSceneCaptureComponent2D::DequeueIfReadComplete()
+{	
+	return TextureReadQueue.DequeueIfReadComplete();
+}
+
+TOptional<int32> UTempoSceneCaptureComponent2D::SequenceIDOfNextCompleteRead() const
+{	
+	return TextureReadQueue.SequenceIdOfNextCompleteRead();
+}
+
+bool UTempoSceneCaptureComponent2D::NextReadComplete() const
 {
-	if (TUniquePtr<FTextureRead> TextureRead = TextureReadQueue.DequeueIfReadComplete())
-	{
-		return DecodeAndRespond(MoveTemp(TextureRead));
-	}
-	
-	return TOptional<TFuture<void>>();
+	return TextureReadQueue.NextReadComplete();
 }
 
 void UTempoSceneCaptureComponent2D::InitRenderTarget()
 {
+	if (SizeXY.X == 0 || SizeXY.Y == 0)
+	{
+		return;
+	}
+
 	TextureTarget = NewObject<UTextureRenderTarget2D>(this);
 
 	TextureTarget->TargetGamma = GetDefault<UTempoSensorsSettings>()->GetSceneCaptureGamma();
@@ -212,5 +301,25 @@ void UTempoSceneCaptureComponent2D::MaybeCapture()
 		return;
 	}
 
-	CaptureSceneDeferred();
+	bool bWorldRenderingDisabled = false;
+	if (const APlayerController* PlayerController = UGameplayStatics::GetPlayerController(GetWorld(), 0))
+	{
+		if (const ULocalPlayer* ClientPlayer = PlayerController->GetLocalPlayer())
+		{
+			if (const UGameViewportClient* ViewportClient = ClientPlayer->ViewportClient)
+			{
+				bWorldRenderingDisabled = ViewportClient->bDisableWorldRendering;
+			}
+		}
+	}
+
+	// If world rendering is enabled, we'll capture the scene with the main render. Otherwise, we'll capture it now.
+	if (bWorldRenderingDisabled)
+	{
+		CaptureScene();
+	}
+	else
+	{
+		CaptureSceneDeferred();
+	}
 }

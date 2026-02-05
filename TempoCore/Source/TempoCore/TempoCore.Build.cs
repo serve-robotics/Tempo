@@ -39,7 +39,9 @@ public class TempoCore : TempoModuleRules
 				// Unreal
 				"AssetRegistry",
 				"CoreUObject",
+				"ChaosVehicles",
 				"Engine",
+				"InputCore",
 				"Slate",
 				"SlateCore",
 				"UMG",

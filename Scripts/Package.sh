@@ -23,6 +23,7 @@ if [ -z ${UNREAL_ENGINE_PATH+x} ]; then
   echo "Please set UNREAL_ENGINE_PATH environment variable and re-run";
   exit 1
 fi
+UNREAL_ENGINE_PATH=$("$SCRIPT_DIR"/FindUnreal.sh)
 
 FIND_UPROJECT() {
     local START_DIR
@@ -98,7 +99,7 @@ else
     DOTNET=$(find ./Engine/Binaries/ThirdParty/DotNet -type f -name dotnet.exe)
   elif [[ "$OSTYPE" = "darwin"* ]]; then
     DOTNETS=$(find ./Engine/Binaries/ThirdParty/DotNet -type f -name dotnet)
-    ARCH=$(arch)
+    ARCH=$(uname -m)
     if [[ "$ARCH" = "arm64" ]]; then
       DOTNET=$(echo "${DOTNETS[@]}" | grep -E "mac-arm64/dotnet")
     elif [[ "$ARCH" = "i386" ]]; then
@@ -110,7 +111,7 @@ else
       # In UE 5.4 there is only one dotnet on Linux. 5.5 added arm64 support.
       DOTNET="$DOTNETS"
     else
-      ARCH=$(arch)
+      ARCH=$(uname -m)
       if [[ "$ARCH" = "arm64" ]]; then
         DOTNET=$(echo "${DOTNETS[@]}" | grep -E "linux-arm64/dotnet")
       elif [[ "$ARCH" = "x86_64" ]]; then

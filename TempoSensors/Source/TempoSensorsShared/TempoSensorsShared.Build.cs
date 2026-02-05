@@ -1,4 +1,7 @@
-﻿using UnrealBuildTool;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using UnrealBuildTool;
 
 public class TempoSensorsShared : TempoModuleRules
 {
@@ -9,8 +12,11 @@ public class TempoSensorsShared : TempoModuleRules
         PublicDependencyModuleNames.AddRange(
             new string[]
             {
+                // Unreal
                 "Core",
                 "Engine",
+                // Tempo
+                "TempoCoreShared",
             }
         );
 
@@ -29,5 +35,10 @@ public class TempoSensorsShared : TempoModuleRules
                 "TempoScripting",
             }
         );
+
+        // Hack to get access to private members of FRayTracingScene in TempoSceneCaptureComponent.
+        // See comment in UTempoSceneCaptureComponent::UpdateSceneCaptureContents for more detail.
+        PrivateIncludePaths.Add(Path.Combine(GetModuleDirectory("Renderer"), "Private"));
+        PrivateIncludePaths.Add(Path.Combine(GetModuleDirectory("Renderer"), "Internal"));
     }
 }

@@ -2,9 +2,19 @@
 
 #include "TempoGameMode.h"
 
+#include "TempoCore.h"
 #include "TempoCoreServiceSubsystem.h"
+#include "TempoCoreSettings.h"
+#include "TempoPlayerController.h"
 
+#include "GameFramework/SpectatorPawn.h"
 #include "Kismet/GameplayStatics.h"
+
+ATempoGameMode::ATempoGameMode()
+{
+	DefaultPawnClass = ASpectatorPawn::StaticClass();
+	PlayerControllerClass = ATempoPlayerController::StaticClass();
+}
 
 void ATempoGameMode::StartPlay()
 {
@@ -36,4 +46,141 @@ void ATempoGameMode::StartPlay()
 const IActorClassificationInterface* ATempoGameMode::GetActorClassifier() const
 {
 	return Cast<IActorClassificationInterface>(GetWorld()->GetSubsystemBase(ActorClassifier));
+}
+
+void ATempoGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+
+	OpenLoopController = Cast<AController>(GetWorld()->SpawnActor(OpenLoopControllerClass, nullptr, nullptr));
+	ClosedLoopController = Cast<AController>(GetWorld()->SpawnActor(ClosedLoopControllerClass, nullptr, nullptr));
+
+	if (const UTempoCoreSettings* TempoCoreSettings = GetDefault<UTempoCoreSettings>())
+	{
+		if (FString ErrorMsg; !SetControlMode(TempoCoreSettings->GetDefaultControlMode(), ErrorMsg))
+		{
+			UE_LOG(LogTempoCore, Error, TEXT("Unable to set default control mode: %s"), *ErrorMsg);
+		}
+	}
+}
+
+void ATempoGameMode::FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation)
+{
+	Super::FinishRestartPlayer(NewPlayer, StartRotation);
+
+	DefaultPawn = NewPlayer->GetPawn();
+}
+
+bool ATempoGameMode::SetControlMode(EControlMode ControlMode, FString& ErrorOut) const
+{
+    if (!RobotClass.Get())
+    {
+	ErrorOut = "RobotClass not set. Not changing control mode.";
+	UE_LOG(LogTempoCore, Error, TEXT("%s"), *ErrorOut);
+	return false;
+    }
+
+    APawn* Robot = Cast<APawn>(UGameplayStatics::GetActorOfClass(this, RobotClass));
+    if (!Robot)
+    {
+	ErrorOut = "No robot found. Not changing control mode.";
+        UE_LOG(LogTempoCore, Error, TEXT("%s"), *ErrorOut);
+       	return false;
+    }
+
+    APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+    if (!PlayerController)
+    {
+       ErrorOut = "No player controller found. Not changing control mode.";
+       UE_LOG(LogTempoCore, Error, TEXT("%s"), *ErrorOut);
+       return false;
+    }
+
+	if (ControlMode == EControlMode::None)
+	{
+		if (AController* OldController = Robot->GetController())
+		{
+			// We only want to force AI controllers to unpossess for none.
+			if (!OldController->IsA<APlayerController>())
+			{
+				OldController->UnPossess();
+			}
+		}
+	}
+
+    AController* NewController = nullptr;
+
+    switch (ControlMode)
+    {
+    case EControlMode::User:
+       {
+          NewController = PlayerController;
+          break;
+       }
+    case EControlMode::ClosedLoop:
+       {
+          NewController = ClosedLoopController;
+          break;
+       }
+    case EControlMode::OpenLoop:
+       {
+          NewController = OpenLoopController;
+       }
+       break;
+    case EControlMode::None:
+    default:
+       {
+          NewController = nullptr;
+       }
+    }
+
+    if (NewController && NewController->GetPawn() != Robot)
+    {
+       NewController->Possess(Robot);
+    }
+	
+    bool bKickPlayerToDefault = false;
+    if (ControlMode == EControlMode::OpenLoop || ControlMode == EControlMode::ClosedLoop)
+    {
+        bKickPlayerToDefault = true;
+    }
+    else if (ControlMode == EControlMode::None && PlayerController->GetPawn() == Robot)
+    {
+        bKickPlayerToDefault = true;
+    }
+
+    if (bKickPlayerToDefault && PlayerController->GetPawn() != DefaultPawn)
+    {
+       if (const APlayerCameraManager* CameraManager = UGameplayStatics::GetPlayerCameraManager(this, 0))
+       {
+          DefaultPawn->SetActorTransform(CameraManager->GetTransform());
+       }
+       PlayerController->Possess(DefaultPawn);
+    }
+
+    ControlModeChangedEvent.Broadcast(ControlMode);
+    return true;
+}
+
+EControlMode ATempoGameMode::GetControlMode() const
+{
+	if (OpenLoopController && OpenLoopController->GetPawn())
+	{
+		return EControlMode::OpenLoop;
+	}
+	if (ClosedLoopController && ClosedLoopController->GetPawn())
+	{
+		return EControlMode::ClosedLoop;
+	}
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	if (RobotClass.Get() && PlayerController && PlayerController->GetPawn() && PlayerController->GetPawn()->IsA(RobotClass))
+	{
+		return EControlMode::User;
+	}
+	return EControlMode::None;
+}
+
+TSubclassOf<AController> ATempoGameMode::GetOpenLoopControllerClass() const
+{
+	return OpenLoopControllerClass;
 }
