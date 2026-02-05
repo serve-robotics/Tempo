@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MassTrafficParkedVehicleVisualizationProcessor.h"
+#include "MassCommonFragments.h"
 #include "MassTrafficVehicleVisualizationProcessor.h"
 #include "MassTrafficSubsystem.h"
 #include "MassRepresentationSubsystem.h"
@@ -22,9 +23,17 @@ UMassTrafficParkedVehicleVisualizationProcessor::UMassTrafficParkedVehicleVisual
 	ExecutionOrder.ExecuteAfter.Add(UE::MassTraffic::ProcessorGroupNames::TrafficIntersectionVisualization);
 }
 
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 6
 void UMassTrafficParkedVehicleVisualizationProcessor::ConfigureQueries()
+#else
+void UMassTrafficParkedVehicleVisualizationProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+#endif
 {
-	Super::ConfigureQueries();
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 6
+Super::ConfigureQueries();
+#else
+Super::ConfigureQueries(EntityManager);
+#endif
 
 	EntityQuery.AddTagRequirement<FMassTrafficParkedVehicleTag>(EMassFragmentPresence::All);
 }
@@ -45,7 +54,11 @@ UMassTrafficParkedVehicleUpdateCustomVisualizationProcessor::UMassTrafficParkedV
 	ExecutionOrder.ExecuteAfter.Add(UMassTrafficParkedVehicleVisualizationProcessor::StaticClass()->GetFName());
 }
 
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 6
 void UMassTrafficParkedVehicleUpdateCustomVisualizationProcessor::ConfigureQueries()
+#else
+void UMassTrafficParkedVehicleUpdateCustomVisualizationProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+#endif
 {
 	EntityQuery.AddTagRequirement<FMassTrafficParkedVehicleTag>(EMassFragmentPresence::All);
 	EntityQuery.AddRequirement<FMassTrafficRandomFractionFragment>(EMassFragmentAccess::ReadOnly);
@@ -69,7 +82,11 @@ void UMassTrafficParkedVehicleUpdateCustomVisualizationProcessor::Execute(FMassE
 	// 
 	// Otherwise the total mesh instance count (e.g: 7 traffic + 3 parked) would be mismatched with the
 	// total custom data count (e.g: 7 traffic + 0 parked)
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 6
 	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+#else
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
+#endif
 		{
 			UMassRepresentationSubsystem* RepresentationSubsystem = Context.GetMutableSharedFragment<FMassRepresentationSubsystemSharedFragment>().RepresentationSubsystem;
 			check(RepresentationSubsystem);
@@ -105,7 +122,11 @@ void UMassTrafficParkedVehicleUpdateCustomVisualizationProcessor::Execute(FMassE
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(TEXT("DebugDisplayVisualization")) 
 
-		EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, World = EntityManager.GetWorld()](FMassExecutionContext& Context)
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 6
+		EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+#else
+		EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
+#endif
 		{
 			const UMassTrafficSubsystem* MassTrafficSubsystem = Context.GetSubsystem<UMassTrafficSubsystem>();
 

@@ -5,10 +5,10 @@ import asyncio
 import colorsys
 import cv2
 from enum import Enum
+import grpc
 import io
 import math
 import numpy as np
-import grpc
 import random
 
 import tempo
@@ -16,93 +16,8 @@ import tempo.tempo_sensors as ts
 import TempoSensors.Sensors_pb2 as Sensors
 import TempoScripting.Geometry_pb2 as Geometry
 import tempo.tempo_world as tw
-
-
-def show_depth_image(image, window_name):
-    image_array = np.asarray(image.depths)
-    image_array = image_array.reshape(image.height, image.width)
-    image_array.astype(np.float32)
-    # The values are the float depth at that point.
-    # Inverting, clamping, and normalizing just makes it easier to see.
-    image_array = np.reciprocal(image_array)
-    image_array = cv2.normalize(image_array, None, 0.1, 1, cv2.NORM_MINMAX)
-    cv2.imshow(window_name, image_array)
-    cv2.waitKey(1)
-
-
-def show_color_image(image, window_name):
-    image_buffer = io.BytesIO(image.data)
-    image_array = np.frombuffer(image_buffer.getvalue(), np.uint8)
-    image_array = image_array.reshape(image.height, image.width, 3)
-    cv2.imshow(window_name, image_array)
-    cv2.waitKey(1)
-
-
-def index_to_bgr(index: int) -> tuple[int, int, int]:
-    """
-    Convert an integer in [0, 255] to a unique BGR color.
-    Uses golden ratio spacing for hue and adds variation in saturation and value.
-    """
-    if index == 0:
-        return 0, 0, 0
-
-    # Golden ratio conjugates
-    phi = 0.618033988749895         # For hue
-    psi = 0.7548776662466927        # Another irrational number for s/v
-
-    # Hue: well-spread using golden ratio
-    h = (index * phi) % 1.0
-
-    # Vary saturation and value to increase contrast and diversity
-    s = 0.6 + 0.4 * ((index * psi) % 1.0)  # Range: 0.6–1.0
-    v = 0.7 + 0.3 * ((index * psi * 1.3) % 1.0)  # Range: 0.7–1.0
-
-    r, g, b = colorsys.hsv_to_rgb(h, s, v)
-    return int(b * 255), int(g * 255), int(r * 255)
-
-bgr_lookup_table = np.array([index_to_bgr(i) for i in range(256)], dtype=np.uint8)  # shape (256, 3)
-
-def show_label_image(image, window_name):
-    image_bytes = io.BytesIO(image.data)
-    image_array = np.frombuffer(image_bytes.getvalue(), dtype=np.uint8)
-    image_array = image_array.reshape((image.height, image.width))
-    bgr_image = bgr_lookup_table[image_array]
-    cv2.imshow(window_name, bgr_image)
-    cv2.waitKey(1)
-
-
-async def stream_color_images(camera_name, owner):
-    window_name = "Camera {} - Color".format(camera_name)
-    try:
-        async for image in ts.stream_color_images(sensor_name=camera_name, owner_name=owner):
-            show_color_image(image, window_name)
-    except asyncio.CancelledError:
-        cv2.destroyWindow(window_name)
-        cv2.waitKey(1)
-        raise  # Reraise to allow normal task cancellation
-
-
-async def stream_depth_images(camera_name, owner):
-    window_name = "Camera {} - Depth".format(camera_name)
-    try:
-        async for image in ts.stream_depth_images(sensor_name=camera_name, owner_name=owner):
-            show_depth_image(image, window_name)
-    except asyncio.CancelledError:
-        cv2.destroyWindow(window_name)
-        cv2.waitKey(1)
-        raise  # Reraise to allow normal task cancellation
-
-
-async def stream_label_images(camera_name, owner):
-    window_name = "Camera {} - Label".format(camera_name)
-    try:
-        async for image in ts.stream_label_images(sensor_name=camera_name, owner_name=owner):
-            show_label_image(image, window_name)
-    except asyncio.CancelledError:
-        cv2.destroyWindow(window_name)
-        cv2.waitKey(1)
-        raise  # Reraise to allow normal task cancellation
-
+import tempo.TempoImageUtils as tiu
+import tempo.TempoLidarUtils as tlu
 
 async def randomize_camera_post_process(camera_name, owner):
     await tw.set_bool_property(actor=owner, component=camera_name, property="PostProcessSettings.bOverride_WhiteTemp", value=True)
@@ -175,12 +90,17 @@ class AvailableSensor:
         return "{}:{}".format(self.owner, self.name)
 
 
-async def get_available_sensors(type):
+async def get_available_sensors(type=None):
     available_sensors = []
     try:
         available_sensors_response = await ts.get_available_sensors()
         for sensor in available_sensors_response.available_sensors:
-            if type == "Camera":
+            if type == None:
+                if Sensors.COLOR_IMAGE in sensor.measurement_types:
+                    available_sensors.append(AvailableSensor("Camera", sensor.name, sensor.owner, sensor.rate, sensor.measurement_types))
+                if Sensors.LIDAR_SCAN in sensor.measurement_types:
+                    available_sensors.append(AvailableSensor("Lidar", sensor.name, sensor.owner, sensor.rate, sensor.measurement_types))
+            elif type == "Camera":
                 if Sensors.COLOR_IMAGE in sensor.measurement_types:
                     available_sensors.append(AvailableSensor("Camera", sensor.name, sensor.owner, sensor.rate, sensor.measurement_types))
     except grpc.aio._call.AioRpcError:
@@ -195,6 +115,8 @@ def measurement_type_string(type):
         return "Depth"
     elif type == Sensors.LABEL_IMAGE:
         return "Label"
+    elif type == Sensors.LIDAR_SCAN:
+        return "PointCloud"
 
 
 async def get_option(state):
@@ -223,12 +145,12 @@ async def get_option(state):
         prompt = "\nWhat socket should we add the sensor to? You may also input another socket name than these choices\n"
         choices += [Choice("None", StateEnum.START, None, metadata={"Socket": ""})]
     elif state.enum == StateEnum.REMOVE_SENSOR:
-        available_sensors = await get_available_sensors("Camera")
+        available_sensors = await get_available_sensors()
         prompt = "\nWhich sensor?\n" if len(available_sensors) > 0 else "\nNo sensors found\n"
         for available_sensor in available_sensors:
             choices += [Choice(str(available_sensor), StateEnum.START, None, {"Name": available_sensor.name, "Owner": available_sensor.owner})]
     elif state.enum == StateEnum.REPOSITION_SENSOR:
-        available_sensors = await get_available_sensors("Camera")
+        available_sensors = await get_available_sensors()
         prompt = "\nWhich sensor?\n" if len(available_sensors) > 0 else "\nNo sensors found\n"
         for available_sensor in available_sensors:
             choices += [Choice(str(available_sensor), StateEnum.REPOSITION_SENSOR_WHAT_TRANSFORM, None, {"Name": available_sensor.name, "Owner": available_sensor.owner})]
@@ -236,7 +158,7 @@ async def get_option(state):
         prompt = "What new transform should we use? Format: X Y Z R P Y Units: Meters/Degrees\n"
         choices += [Choice("0 0 0 0 0 0", StateEnum.START, None)]
     elif state.enum == StateEnum.GET_SENSOR_PROPERTIES:
-        available_sensors = await get_available_sensors("Camera")
+        available_sensors = await get_available_sensors()
         prompt = "\nWhich sensor?" if len(available_sensors) > 0 else "\nNo sensors found\n"
         for available_sensor in available_sensors:
             choices += [Choice(str(available_sensor), StateEnum.START, None, {"Name": available_sensor.name, "Owner": available_sensor.owner})]
@@ -246,7 +168,7 @@ async def get_option(state):
         for available_sensor in available_sensors:
             choices += [Choice(str(available_sensor), StateEnum.START, None, {"Name": available_sensor.name, "Owner": available_sensor.owner})]
     elif state.enum == StateEnum.START_STREAM_SENSOR_DATA:
-        available_sensors = await get_available_sensors("Camera")
+        available_sensors = await get_available_sensors()
         prompt = "\nWhich sensor?" if len(available_sensors) > 0 else "\nNo sensors found\n"
         for available_sensor in available_sensors:
             for measurement_type in available_sensor.measurement_types:
@@ -366,13 +288,16 @@ async def take_action(state, option, user_input):
                     del state.sensor_streams[key]
                 if chosen.metadata["Type"] == Sensors.COLOR_IMAGE:
                     state.sensor_streams[key] = \
-                        asyncio.create_task(stream_color_images(chosen.metadata["Name"], chosen.metadata["Owner"]))
+                        asyncio.create_task(tiu.stream_color_images(chosen.metadata["Name"], chosen.metadata["Owner"]))
                 if chosen.metadata["Type"] == Sensors.DEPTH_IMAGE:
                     state.sensor_streams[key] = \
-                        asyncio.create_task(stream_depth_images(chosen.metadata["Name"], chosen.metadata["Owner"]))
+                        asyncio.create_task(tiu.stream_depth_images(chosen.metadata["Name"], chosen.metadata["Owner"]))
                 if chosen.metadata["Type"] == Sensors.LABEL_IMAGE:
                     state.sensor_streams[key] = \
-                        asyncio.create_task(stream_label_images(chosen.metadata["Name"], chosen.metadata["Owner"]))
+                        asyncio.create_task(tiu.stream_label_images(chosen.metadata["Name"], chosen.metadata["Owner"]))
+                if chosen.metadata["Type"] == Sensors.LIDAR_SCAN:
+                    state.sensor_streams[key] = \
+                        asyncio.create_task(tlu.stream_lidar_scans(chosen.metadata["Name"], chosen.metadata["Owner"], "Intensity"))
             except grpc.aio._call.AioRpcError as e:
                 print("Error while starting sensor data stream: {}".format(e))
     elif state.enum == StateEnum.END_STREAM_SENSOR_DATA:

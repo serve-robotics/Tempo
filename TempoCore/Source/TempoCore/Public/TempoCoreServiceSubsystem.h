@@ -19,6 +19,8 @@ namespace TempoCore
 {
 	class LoadLevelRequest;
 	class CurrentLevelResponse;
+	class SetMainViewportRenderEnabledRequest;
+	class SetControlModeRequest;
 }
 
 UCLASS()
@@ -50,6 +52,10 @@ public:
 	bool GetStartPaused() const { return bStartPaused; }
 
 	void OnLevelLoaded();
+
+	void SetRenderMainViewportEnabled(const TempoCore::SetMainViewportRenderEnabledRequest& Request, const TResponseDelegate<TempoScripting::Empty>& ResponseContinuation);
+
+	void SetControlMode(const TempoCore::SetControlModeRequest& Request, const TResponseDelegate<TempoScripting::Empty>& ResponseContinuation);
 
 protected:
 	TOptional<TResponseDelegate<TempoScripting::Empty>> PendingLevelLoad;

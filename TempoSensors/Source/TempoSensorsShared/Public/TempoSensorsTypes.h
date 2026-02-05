@@ -12,6 +12,8 @@ enum EMeasurementType: uint8
 	COLOR_IMAGE = 0 UMETA(DisplayName="ColorImage"),
 	DEPTH_IMAGE = 1 UMETA(DisplayName="DepthImage"),
 	LABEL_IMAGE = 2 UMETA(DisplayName="LabelImage"),
+	LIDAR_SCAN = 3 UMETA(DisplayName="LidarScan"),
+	BOUNDING_BOXES = 4 UMETA(DisplayName="BoundingBoxes"),
 };
 
 UENUM(BlueprintType)
@@ -19,4 +21,11 @@ enum ELabelType : uint8
 {
 	Semantic = 0,
 	Instance = 1
+};
+
+UENUM(BlueprintType)
+enum EColorImageEncoding: uint8
+{
+	RGB8 = 0,
+	BGR8 = 1
 };

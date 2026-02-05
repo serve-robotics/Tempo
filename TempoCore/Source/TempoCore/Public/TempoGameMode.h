@@ -3,12 +3,14 @@
 #pragma once
 
 #include "DefaultActorClassifier.h"
+#include "TempoCoreTypes.h"
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 
 #include "TempoGameMode.generated.h"
 
+DECLARE_MULTICAST_DELEGATE_OneParam(FControlModeChanged, EControlMode);
 DECLARE_MULTICAST_DELEGATE_OneParam(FPreBeginPlay, UWorld*);
 
 UCLASS(Blueprintable, Abstract)
@@ -17,14 +19,33 @@ class TEMPOCORE_API ATempoGameMode : public AGameModeBase
 	GENERATED_BODY()
 
 public:
+	ATempoGameMode();
+
 	const IActorClassificationInterface* GetActorClassifier() const;
 
 	virtual void StartPlay() override;
 
+	virtual void BeginPlay() override;
+
+	virtual void FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation) override;
+
 	bool BeginPlayDeferred() const { return bBeginPlayDeferred; }
+
+	FORCEINLINE APawn* GetDefaultPawn() const { return DefaultPawn; }
 
 	// An event that fires *right* before BeginPlay
 	FPreBeginPlay PreBeginPlayEvent;
+
+	bool SetControlMode(EControlMode ControlMode, FString& ErrorOut) const;
+
+	EControlMode GetControlMode() const;
+
+	FControlModeChanged ControlModeChangedEvent;
+
+	TSubclassOf<APawn> GetRobotClass() const { return RobotClass; }
+
+	UFUNCTION(BlueprintPure, Category = "Tempo Game Mode")
+	TSubclassOf<AController> GetOpenLoopControllerClass() const;
 
 protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(MustImplement="/Script/TempoCore.ActorClassificationInterface"))
@@ -32,4 +53,22 @@ protected:
 
 	UPROPERTY()
 	bool bBeginPlayDeferred = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	TSubclassOf<AController> OpenLoopControllerClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	TSubclassOf<AController> ClosedLoopControllerClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	TSubclassOf<APawn> RobotClass;
+
+	UPROPERTY()
+	APawn* DefaultPawn = nullptr;
+
+	UPROPERTY()
+	AController* OpenLoopController = nullptr;
+
+	UPROPERTY()
+	AController* ClosedLoopController = nullptr;
 };
