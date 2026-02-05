@@ -50,7 +50,6 @@ void UTempoSceneCaptureComponent2D::Activate(bool bReset)
 {
 	Super::Activate(bReset);
 
-	InitRenderTarget();
 	RestartCaptureTimer();
 }
 
