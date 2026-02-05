@@ -32,6 +32,10 @@ TOptional<FString> MeasurementTypeTopicStr(EMeasurementType MeasurementType)
 		{
 			return TOptional<FString>(TEXT("scan"));
 		}
+	case LIDAR_SCAN:
+		{
+			return TEXT("scan");
+		}
 	default:
 		{
 			return TOptional<FString>();
@@ -185,6 +189,10 @@ void UTempoSensorsROSBridgeSubsystem::UpdatePublishers()
 					case LABEL_IMAGE:
 						{
 							ROSNode->AddPublisher<TempoCamera::LabelImage>(Topic, FROSQOSProfile(1).Reliable());
+							break;
+						}
+					case LIDAR_SCAN:
+						{
 							break;
 						}
 					default:

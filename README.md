@@ -41,6 +41,10 @@ git submodule add https://github.com/tempo-sim/Tempo.git
 git submodule update --init --recursive
 ```
 
+### Project Changes
+Tempo requires one change to a vanilla Unreal Engine project to build:
+- Your project's `*.Target.cs` files must use the Tempo UnrealBuildTool toolchain for your platform, as in [TempoSample.Target.cs](https://github.com/tempo-sim/TempoSample/blob/main/Source/TempoSample.Target.cs) and [TempoSampleEditor.Target.cs](https://github.com/tempo-sim/TempoSample/blob/main/Source/TempoSampleEditor.Target.cs).
+
 ### One-Time Setup
 Run the `Setup.sh` script (from the `Tempo` root) once. This script will:
 - Modify your project's `*.Target.cs` files to use Tempo's custom toolchain, which is necessary for linking certain third party dependencies properly

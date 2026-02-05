@@ -8,12 +8,27 @@
 #include "TempoSensorsConstants.h"
 #include "TempoSensorsSettings.h"
 
+#include "TempoSensorsConstants.h"
+
+#include "TempoActorLabeler.h"
+
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Math/Box2D.h"
 #include "TextureResource.h"
 
+#include "Math/Box2D.h"
+
+/**
+ * Compute 2D bounding boxes from label data.
+ * Single-pass algorithm: scan all pixels, maintain min/max coords per instance ID.
+ * @param LabelData Array of label values (one per pixel)
+ * @param Width Image width in pixels
+ * @param Height Image height in pixels
+ * @return Map of instance ID to bounding box
+ */
+static TMap<int32, FBox2D> ComputeBoundingBoxes(const TArray<uint8>& LabelData, uint32 Width, uint32 Height)
 // Root-Finding Solver (Newton-Raphson)
 static double Solve(const TFunction<double(double)>& Objective, const TFunction<double(double)>& Derivative, const double InitialGuess, const int32 MaxIter, const double Threshold)
 {
@@ -71,6 +86,21 @@ static double SolveInverseDistortion(double TargetRadius, double K1, double K2, 
  */
 static TMap<int32, FBox2D> ComputeBoundingBoxes(const TArray<uint8>& LabelData, uint32 Width, uint32 Height)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ComputeBoundingBoxes);
+
+	TMap<int32, FBox2D> Boxes;
+	for (uint32 Y = 0; Y < Height; ++Y)
+	{
+		for (uint32 X = 0; X < Width; ++X)
+		{
+			const uint8 InstanceId = LabelData[Y * Width + X];
+			if (InstanceId > 0)  // 0 = unlabeled
+			{
+				Boxes.FindOrAdd(InstanceId) += FUintPoint(X, Y);
+			}
+		}
+	}
+	return Boxes;
 	TRACE_CPUPROFILER_EVENT_SCOPE(ComputeBoundingBoxes);
 
 	TMap<int32, FBox2D> Boxes;
@@ -144,7 +174,6 @@ void RespondToColorRequests(const TTextureRead<PixelType>* TextureRead, const TA
 		
 		std::vector<char> ImageData;
 		ImageData.resize(TextureRead->Image.Num() * 3);
-		
 		const UTempoSensorsSettings* TempoSensorsSettings = GetDefault<UTempoSensorsSettings>();
 		if (!TempoSensorsSettings)
 		{
@@ -217,6 +246,7 @@ void RespondToBoundingBoxRequests(const TTextureRead<PixelType>* TextureRead, co
 			LabelData[Idx] = TextureRead->Image[Idx].Label();
 		});
 		
+		// Compute bounding boxes
 		TMap<int32, FBox2D> BoundingBoxes = ComputeBoundingBoxes(LabelData, TextureRead->ImageSize.X, TextureRead->ImageSize.Y);
 
 		// Add bounding boxes to proto message using the map captured at render time
@@ -324,6 +354,7 @@ UTempoCamera::UTempoCamera()
 void UTempoCamera::BeginPlay()
 {
 	Super::BeginPlay();
+
 	ApplyDepthEnabled();
 }
 
@@ -544,11 +575,13 @@ void UTempoCamera::UpdateSceneCaptureContents(FSceneInterface* Scene, ISceneRend
 {
 	if (!bDepthEnabled && !PendingDepthImageRequests.IsEmpty())
 	{
+		// If a client is requesting depth, start rendering it.
 		SetDepthEnabled(true);
 	}
 	
 	if (bDepthEnabled && PendingDepthImageRequests.IsEmpty())
 	{
+		// If no client is requesting depth, stop rendering it.
 		SetDepthEnabled(false);
 	}
 	
@@ -625,6 +658,45 @@ TOptional<TFuture<void>> UTempoCamera::SendMeasurements()
 	return Future;
 }
 
+FString UTempoCamera::GetOwnerName() const
+{
+	check(GetOwner());
+
+	return GetOwner()->GetActorNameOrLabel();
+}
+
+FString UTempoCamera::GetSensorName() const
+{
+	return GetName();
+}
+
+bool UTempoCamera::IsAwaitingRender()
+{
+	return IsNextReadAwaitingRender();
+}
+
+void UTempoCamera::OnRenderCompleted()
+{
+	ReadNextIfAvailable();
+}
+
+void UTempoCamera::BlockUntilMeasurementsReady() const
+{
+	BlockUntilNextReadComplete();
+}
+
+TOptional<TFuture<void>> UTempoCamera::SendMeasurements()
+{
+	TOptional<TFuture<void>> Future;
+
+	if (TUniquePtr<FTextureRead> TextureRead = DequeueIfReadComplete())
+	{
+		Future = DecodeAndRespond(MoveTemp(TextureRead));
+	}
+
+	return Future;
+}
+
 bool UTempoCamera::HasPendingRequests() const
 {
 	return !PendingColorImageRequests.IsEmpty() || !PendingLabelImageRequests.IsEmpty() || !PendingDepthImageRequests.IsEmpty() || !PendingBoundingBoxesRequests.IsEmpty();
@@ -634,6 +706,7 @@ FTextureRead* UTempoCamera::MakeTextureRead() const
 {
 	check(GetWorld());
 
+	// Capture instance-to-semantic mapping at render
 	TMap<uint8, uint8> InstanceToSemanticMap;
 	if (UTempoActorLabeler* Labeler = GetWorld()->GetSubsystem<UTempoActorLabeler>())
 	{
