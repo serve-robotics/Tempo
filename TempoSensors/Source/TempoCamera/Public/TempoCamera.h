@@ -159,6 +159,8 @@ public:
 
 	virtual void RequestMeasurement(const TempoCamera::BoundingBoxesRequest& Request, const TResponseDelegate<TempoCamera::BoundingBoxes>& ResponseContinuation);
 
+	void RequestMeasurement(const TempoCamera::BoundingBoxesRequest& Request, const TResponseDelegate<TempoCamera::BoundingBoxes>& ResponseContinuation);
+
 	FTempoCameraIntrinsics GetIntrinsics() const;
 
 	// Begin ITempoSensorInterface
