@@ -283,9 +283,6 @@ protected:
 	// Gets the number of pending texture reads
 	int32 NumPendingTextureReads() const { return TextureReadQueue.Num(); }
 
-	// Gets the number of pending texture reads
-	int32 NumPendingTextureReads() const { return TextureReadQueue.Num(); }
-
 private:
 	// Starts or restarts the timer that calls MaybeCapture
 	void RestartCaptureTimer();
