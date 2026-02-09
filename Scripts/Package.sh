@@ -7,22 +7,6 @@ PROJECT_ROOT=$("$SCRIPT_DIR"/FindProjectRoot.sh)
 cd "$PROJECT_ROOT"
 PROJECT_NAME=$(find . -maxdepth 1 -name "*.uproject" -exec basename {} .uproject \;)
 
-# Parse additional map directories from arguments
-ADDITIONAL_MAP_DIRS=()
-OTHER_ARGS=()
-for arg in "$@"; do
-    if [[ $arg == --map-dir=* ]]; then
-        ADDITIONAL_MAP_DIRS+=("${arg#--map-dir=}")
-    else
-        OTHER_ARGS+=("$arg")
-    fi
-done
-
-# Check for UNREAL_ENGINE_PATH
-if [ -z ${UNREAL_ENGINE_PATH+x} ]; then
-  echo "Please set UNREAL_ENGINE_PATH environment variable and re-run";
-  exit 1
-fi
 UNREAL_ENGINE_PATH=$("$SCRIPT_DIR"/FindUnreal.sh)
 
 FIND_UPROJECT() {
@@ -160,9 +144,4 @@ if [[ "$TARGET_PLATFORM" = "Win64" ]]; then
 else
   cp -r "$PROJECT_ROOT/Saved/Cooked/$TARGET_PLATFORM/$PROJECT_NAME/Metadata" "$PROJECT_ROOT/Packaged"
   cp -r "$PROJECT_ROOT/Saved/Cooked/$TARGET_PLATFORM/$PROJECT_NAME/AssetRegistry.bin" "$PROJECT_ROOT/Packaged"
-fi
-
-# Rename pak chunks by the levels they contain (unless told not to or there are no chunks)
-if [[ $* != *skippakchunkrename* && -d "$PROJECT_ROOT/Packaged/Metadata/ChunkManifest" ]]; then
-  eval "$SCRIPT_DIR"/RenamePakChunks.sh "$PROJECT_ROOT/Packaged" "$PROJECT_ROOT/Packaged/Metadata" "${ADDITIONAL_MAP_DIRS[@]}"
 fi
