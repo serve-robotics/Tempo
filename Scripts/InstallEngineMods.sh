@@ -67,9 +67,9 @@ elif [[ "$OSTYPE" = "darwin"* ]]; then
   DOTNETS=$(find ./Engine/Binaries/ThirdParty/DotNet -type f -name dotnet)
   ARCH=$(uname -m)
   if [[ "$ARCH" = "arm64" ]]; then
-    DOTNET=$(echo "${DOTNETS[@]}" | grep -E "mac-arm64/dotnet")
+    DOTNET=$(printf '%s\n' "${DOTNETS[@]}" | grep -E "mac-arm64/dotnet$" | sort -V | tail -n 1)
   elif [[ "$ARCH" = "i386" ]]; then
-    DOTNET=$(echo "${DOTNETS[@]}" | grep -E "mac-x64/dotnet")
+    DOTNET=$(printf '%s\n' "${DOTNETS[@]}" | grep -E "mac-x64/dotnet$" | sort -V | tail -n 1)
   fi
 elif [[ "$OSTYPE" = "linux-gnu"* ]]; then
   DOTNETS=$(find ./Engine/Binaries/ThirdParty/DotNet -type f -name dotnet)
@@ -79,9 +79,9 @@ elif [[ "$OSTYPE" = "linux-gnu"* ]]; then
   else
     ARCH=$(uname -m)
     if [[ "$ARCH" = "arm64" ]]; then
-      DOTNET=$(echo "${DOTNETS[@]}" | grep -E "linux-arm64/dotnet")
+      DOTNET=$(printf '%s\n' "${DOTNETS[@]}" | grep -E "linux-arm64/dotnet$" | sort -V | tail -n 1)
     elif [[ "$ARCH" = "x86_64" ]]; then
-      DOTNET=$(echo "${DOTNETS[@]}" | grep -E "linux-x64/dotnet")
+      DOTNET=$(printf '%s\n' "${DOTNETS[@]}" | grep -E "linux-x64/dotnet$" | sort -V | tail -n 1)
     fi
   fi
 fi

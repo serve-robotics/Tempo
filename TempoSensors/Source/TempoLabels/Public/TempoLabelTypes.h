@@ -24,3 +24,24 @@ struct FSemanticLabel: public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	TSet<TSoftObjectPtr<UStaticMesh>> StaticMeshTypes;
 };
+
+USTRUCT(BlueprintType)
+struct FTempoInstanceActorMetadata
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	int32 InstanceId = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	int32 SemanticId = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	FString ActorGuid;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	FString ActorName;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	FString ActorPath;
+};

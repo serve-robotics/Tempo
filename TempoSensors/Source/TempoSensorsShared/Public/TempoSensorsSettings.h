@@ -31,6 +31,7 @@ public:
 	ELabelType GetLabelType() const { return LabelType; }
 	bool GetGloballyUniqueInstanceLabels() const { return bGloballyUniqueInstanceLabels; }
 	bool GetInstantaneouslyUniqueInstanceLabels() const { return bInstantaneouslyUniqueInstanceLabels; }
+	int32 GetMinVisiblePixelsForAnnotation() const { return MinVisiblePixelsForAnnotation; }
 
 	// Camera
 	TObjectPtr<UMaterialInterface> GetCameraPostProcessMaterialNoDepth() const { return CameraPostProcessMaterialNoDepth.LoadSynchronous(); }
@@ -73,6 +74,10 @@ private:
 	// Whether to reuse instance labels after exhausting our 256 unique labels.
 	UPROPERTY(EditAnywhere, Config, Category="Labels", meta=(EditCondition="LabelType == ELabelType::Instance"))
 	bool bInstantaneouslyUniqueInstanceLabels = false;
+
+	// Minimum number of visible pixels required before an annotated object is emitted.
+	UPROPERTY(EditAnywhere, Config, Category="Labels", meta=(ClampMin=0))
+	int32 MinVisiblePixelsForAnnotation = 16;
 
 	// The post process material that should be used by TempoCamera when not capturing the depth image.
 	UPROPERTY(EditAnywhere, Config, Category="Camera", meta=( AllowedClasses="/Script/Engine.BlendableInterface", Keywords="PostProcess" ))

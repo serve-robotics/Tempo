@@ -4,6 +4,7 @@
 
 #include "TempoCamera/Camera.pb.h"
 
+#include "TempoLabelTypes.h"
 #include "TempoSensorInterface.h"
 #include "TempoSceneCaptureComponent2D.h"
 
@@ -89,11 +90,11 @@ struct TTextureRead<FCameraPixelWithDepth> : TTextureReadBase<FCameraPixelWithDe
 {
 	TTextureRead(const FIntPoint& ImageSizeIn, int32 SequenceIdIn, double CaptureTimeIn, const FString& OwnerNameIn,
 		const FString& SensorNameIn, const FTransform& SensorTransformIn, float MinDepthIn, float MaxDepthIn,
-		TMap<uint8, uint8>&& InstanceToSemanticMapIn)
-	   : TTextureReadBase(ImageSizeIn, SequenceIdIn, CaptureTimeIn, OwnerNameIn, SensorNameIn, SensorTransformIn),
-	     MinDepth(MinDepthIn), MaxDepth(MaxDepthIn), InstanceToSemanticMap(MoveTemp(InstanceToSemanticMapIn))
-	{
-	}
+		TMap<uint8, FTempoInstanceActorMetadata>&& InstanceMetadataMapIn)
+		   : TTextureReadBase(ImageSizeIn, SequenceIdIn, CaptureTimeIn, OwnerNameIn, SensorNameIn, SensorTransformIn),
+		     MinDepth(MinDepthIn), MaxDepth(MaxDepthIn), InstanceMetadataMap(MoveTemp(InstanceMetadataMapIn))
+		{
+		}
 
 	virtual FName GetType() const override { return TEXT("WithDepth"); }
 
@@ -104,18 +105,18 @@ struct TTextureRead<FCameraPixelWithDepth> : TTextureReadBase<FCameraPixelWithDe
 
 	float MinDepth;
 	float MaxDepth;
-	TMap<uint8, uint8> InstanceToSemanticMap;
+	TMap<uint8, FTempoInstanceActorMetadata> InstanceMetadataMap;
 };
 
 template <>
 struct TTextureRead<FCameraPixelNoDepth> : TTextureReadBase<FCameraPixelNoDepth>
 {
 	TTextureRead(const FIntPoint& ImageSizeIn, int32 SequenceIdIn, double CaptureTimeIn, const FString& OwnerNameIn,
-		const FString& SensorNameIn, const FTransform& SensorTransformIn, TMap<uint8, uint8>&& InstanceToSemanticMapIn)
-	   : TTextureReadBase(ImageSizeIn, SequenceIdIn, CaptureTimeIn, OwnerNameIn, SensorNameIn, SensorTransformIn),
-	     InstanceToSemanticMap(MoveTemp(InstanceToSemanticMapIn))
-	{
-	}
+		const FString& SensorNameIn, const FTransform& SensorTransformIn, TMap<uint8, FTempoInstanceActorMetadata>&& InstanceMetadataMapIn)
+		   : TTextureReadBase(ImageSizeIn, SequenceIdIn, CaptureTimeIn, OwnerNameIn, SensorNameIn, SensorTransformIn),
+		     InstanceMetadataMap(MoveTemp(InstanceMetadataMapIn))
+		{
+		}
 
 	virtual FName GetType() const override { return TEXT("NoDepth"); }
 
@@ -123,7 +124,7 @@ struct TTextureRead<FCameraPixelNoDepth> : TTextureReadBase<FCameraPixelNoDepth>
 	void RespondToRequests(const TArray<FLabelImageRequest>& Requests, float TransmissionTime) const;
 	void RespondToRequests(const TArray<FBoundingBoxesRequest>& Requests, float TransmissionTime) const;
 
-	TMap<uint8, uint8> InstanceToSemanticMap;
+	TMap<uint8, FTempoInstanceActorMetadata> InstanceMetadataMap;
 };
 
 struct TEMPOCAMERA_API FTempoCameraIntrinsics
@@ -160,6 +161,7 @@ public:
 	virtual void RequestMeasurement(const TempoCamera::BoundingBoxesRequest& Request, const TResponseDelegate<TempoCamera::BoundingBoxes>& ResponseContinuation);
 
 	FTempoCameraIntrinsics GetIntrinsics() const;
+	const TArray<FTempoInstanceActorMetadata>& GetLastFrameInstanceActorMetadata() const { return LastFrameInstanceActorMetadata; }
 
 	// Begin ITempoSensorInterface
 	virtual FString GetOwnerName() const override;
@@ -208,4 +210,5 @@ protected:
 	TArray<FLabelImageRequest> PendingLabelImageRequests;
 	TArray<FDepthImageRequest> PendingDepthImageRequests;
 	TArray<FBoundingBoxesRequest> PendingBoundingBoxesRequests;
+	mutable TArray<FTempoInstanceActorMetadata> LastFrameInstanceActorMetadata;
 };

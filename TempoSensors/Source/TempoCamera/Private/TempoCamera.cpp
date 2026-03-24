@@ -16,19 +16,25 @@
 
 #include "Math/Box2D.h"
 
+struct FVisibleBoundingBox
+{
+	FBox2D Box;
+	int32 VisiblePixelCount = 0;
+};
+
 /**
- * Compute 2D bounding boxes from label data.
- * Single-pass algorithm: scan all pixels, maintain min/max coords per instance ID.
+ * Compute 2D bounding boxes and visible pixel counts from label data.
+ * Single-pass algorithm: scan all pixels, maintain min/max coords and counts per instance ID.
  * @param LabelData Array of label values (one per pixel)
  * @param Width Image width in pixels
  * @param Height Image height in pixels
- * @return Map of instance ID to bounding box
+ * @return Map of instance ID to visible bounding box data
  */
-static TMap<int32, FBox2D> ComputeBoundingBoxes(const TArray<uint8>& LabelData, uint32 Width, uint32 Height)
+static TMap<int32, FVisibleBoundingBox> ComputeBoundingBoxes(const TArray<uint8>& LabelData, uint32 Width, uint32 Height)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ComputeBoundingBoxes);
 
-	TMap<int32, FBox2D> Boxes;
+	TMap<int32, FVisibleBoundingBox> Boxes;
 	for (uint32 Y = 0; Y < Height; ++Y)
 	{
 		for (uint32 X = 0; X < Width; ++X)
@@ -36,7 +42,9 @@ static TMap<int32, FBox2D> ComputeBoundingBoxes(const TArray<uint8>& LabelData, 
 			const uint8 InstanceId = LabelData[Y * Width + X];
 			if (InstanceId > 0)  // 0 = unlabeled
 			{
-				Boxes.FindOrAdd(InstanceId) += FUintPoint(X, Y);
+				FVisibleBoundingBox& VisibleBoundingBox = Boxes.FindOrAdd(InstanceId);
+				VisibleBoundingBox.Box += FUintPoint(X, Y);
+				++VisibleBoundingBox.VisiblePixelCount;
 			}
 		}
 	}
@@ -134,9 +142,9 @@ void RespondToLabelRequests(const TTextureRead<PixelType>* TextureRead, const TA
 		{
 			ImageData[Idx] = TextureRead->Image[Idx].Label();
 		});
-		LabelImage.mutable_data()->assign(ImageData.begin(), ImageData.end());
-		TextureRead->ExtractMeasurementHeader(TransmissionTime, LabelImage.mutable_header());
-	}
+			LabelImage.mutable_data()->assign(ImageData.begin(), ImageData.end());
+			TextureRead->ExtractMeasurementHeader(TransmissionTime, LabelImage.mutable_header());
+		}
 
 	TRACE_CPUPROFILER_EVENT_SCOPE(TempoCameraRespondLabel);
 	for (auto LabelImageRequestIt = Requests.CreateConstIterator(); LabelImageRequestIt; ++LabelImageRequestIt)
@@ -157,6 +165,7 @@ void RespondToBoundingBoxRequests(const TTextureRead<PixelType>* TextureRead, co
 		Response.set_width(TextureRead->ImageSize.X);
 		Response.set_height(TextureRead->ImageSize.Y);
 		TextureRead->ExtractMeasurementHeader(TransmissionTime, Response.mutable_header());
+		const int32 MinVisiblePixelsForAnnotation = GetDefault<UTempoSensorsSettings>()->GetMinVisiblePixelsForAnnotation();
 
 		// Extract label data from pixels
 		TArray<uint8> LabelData;
@@ -167,25 +176,30 @@ void RespondToBoundingBoxRequests(const TTextureRead<PixelType>* TextureRead, co
 		});
 
 		// Compute bounding boxes
-		TMap<int32, FBox2D> BoundingBoxes = ComputeBoundingBoxes(LabelData, TextureRead->ImageSize.X, TextureRead->ImageSize.Y);
+		TMap<int32, FVisibleBoundingBox> BoundingBoxes = ComputeBoundingBoxes(LabelData, TextureRead->ImageSize.X, TextureRead->ImageSize.Y);
 
-		// Add bounding boxes to proto message using the map captured at render time
-		for (const auto& [InstanceId, Box] : BoundingBoxes)
+		// Add bounding boxes to proto message using the metadata captured at render time
+		for (const auto& [InstanceId, VisibleBoundingBox] : BoundingBoxes)
 		{
+			if (VisibleBoundingBox.VisiblePixelCount < MinVisiblePixelsForAnnotation)
+			{
+				continue;
+			}
+
 			TempoCamera::BoundingBox2D* BBoxProto = Response.add_bounding_boxes();
-			BBoxProto->set_min_x(FMath::RoundToInt32(Box.Min.X));
-			BBoxProto->set_min_y(FMath::RoundToInt32(Box.Min.Y));
-			BBoxProto->set_max_x(FMath::RoundToInt32(Box.Max.X));
-			BBoxProto->set_max_y(FMath::RoundToInt32(Box.Max.Y));
+			BBoxProto->set_min_x(FMath::RoundToInt32(VisibleBoundingBox.Box.Min.X));
+			BBoxProto->set_min_y(FMath::RoundToInt32(VisibleBoundingBox.Box.Min.Y));
+			BBoxProto->set_max_x(FMath::RoundToInt32(VisibleBoundingBox.Box.Max.X));
+			BBoxProto->set_max_y(FMath::RoundToInt32(VisibleBoundingBox.Box.Max.Y));
 			BBoxProto->set_instance_id(InstanceId);
 
-			// Find semantic ID from mapping captured at render time
-			const uint8* SemanticId = TextureRead->InstanceToSemanticMap.Find(InstanceId);
-			if (!SemanticId)
+			// Find semantic ID from mapping captured at render time.
+			const FTempoInstanceActorMetadata* Metadata = TextureRead->InstanceMetadataMap.Find(InstanceId);
+			if (!Metadata)
 			{
-				UE_LOG(LogTemp, Warning, TEXT("No semantic ID found for instance ID %d"), InstanceId);
+				UE_LOG(LogTemp, Warning, TEXT("No actor metadata found for instance ID %d"), InstanceId);
 			}
-			BBoxProto->set_semantic_id(SemanticId ? *SemanticId : 0);
+			BBoxProto->set_semantic_id(Metadata ? Metadata->SemanticId : 0);
 		}
 	}
 
@@ -374,16 +388,21 @@ FTextureRead* UTempoCamera::MakeTextureRead() const
 {
 	check(GetWorld());
 
-	// Capture instance-to-semantic mapping at render time for bounding box requests
-	TMap<uint8, uint8> InstanceToSemanticMap;
+	// Capture per-instance actor metadata at render time for bounding box requests.
+	TMap<uint8, FTempoInstanceActorMetadata> InstanceMetadataMap;
 	if (UTempoActorLabeler* Labeler = GetWorld()->GetSubsystem<UTempoActorLabeler>())
 	{
-		InstanceToSemanticMap = Labeler->GetInstanceToSemanticIdMap();
+		InstanceMetadataMap = Labeler->GetInstanceToActorMetadataMap();
 	}
+	InstanceMetadataMap.GenerateValueArray(LastFrameInstanceActorMetadata);
+	LastFrameInstanceActorMetadata.Sort([](const FTempoInstanceActorMetadata& A, const FTempoInstanceActorMetadata& B)
+	{
+		return A.InstanceId < B.InstanceId;
+	});
 
 	return bDepthEnabled ?
-		static_cast<FTextureRead*>(new TTextureRead<FCameraPixelWithDepth>(SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(), GetComponentTransform(), MinDepth, MaxDepth, MoveTemp(InstanceToSemanticMap))):
-		static_cast<FTextureRead*>(new TTextureRead<FCameraPixelNoDepth>(SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(), GetComponentTransform(), MoveTemp(InstanceToSemanticMap)));
+		static_cast<FTextureRead*>(new TTextureRead<FCameraPixelWithDepth>(SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(), GetComponentTransform(), MinDepth, MaxDepth, MoveTemp(InstanceMetadataMap))):
+		static_cast<FTextureRead*>(new TTextureRead<FCameraPixelNoDepth>(SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(), GetComponentTransform(), MoveTemp(InstanceMetadataMap)));
 }
 
 TFuture<void> UTempoCamera::DecodeAndRespond(TUniquePtr<FTextureRead> TextureRead)

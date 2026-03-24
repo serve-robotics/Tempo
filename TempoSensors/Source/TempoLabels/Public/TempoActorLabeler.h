@@ -6,11 +6,13 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataTable.h"
+#include "Misc/Guid.h"
 #include "Subsystems/WorldSubsystem.h"
 
 #include "TempoScriptable.h"
 #include "TempoScriptingServer.h"
 #include "TempoSubsystems.h"
+#include "TempoLabelTypes.h"
 
 #include "TempoActorLabeler.generated.h"
 
@@ -80,6 +82,7 @@ public:
 	const TSet<FName>& GetLabeledActorClassNames() const { return LabeledActorClassNames; }
 
 	TMap<uint8, uint8> GetInstanceToSemanticIdMap() const;
+	TMap<uint8, FTempoInstanceActorMetadata> GetInstanceToActorMetadataMap() const;
 
 protected:
 	void BuildLabelMaps();
@@ -107,6 +110,9 @@ protected:
 	void ReLabelAllActors();
 
 	static void AssignId(UPrimitiveComponent* Component, const FInstanceSemanticIdPair& IdPair);
+	static const AActor* ResolveRepresentativeActor(const UObject* LabeledObject);
+
+	FGuid& FindOrAddActorGuid(const AActor* Actor);
 
 	UPROPERTY(VisibleAnywhere)
 	UDataTable* SemanticLabelTable;
@@ -134,4 +140,5 @@ protected:
 	TSet<FName> LabeledActorClassNames;
 
 	FInstanceIdAllocator InstanceIdAllocator = FInstanceIdAllocator(1, 255);
+	TMap<const AActor*, FGuid> ActorGuids;
 };

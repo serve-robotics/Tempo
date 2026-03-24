@@ -136,6 +136,37 @@ TMap<uint8, uint8> UTempoActorLabeler::GetInstanceToSemanticIdMap() const
 	return Result;
 }
 
+TMap<uint8, FTempoInstanceActorMetadata> UTempoActorLabeler::GetInstanceToActorMetadataMap() const
+{
+	TMap<uint8, FTempoInstanceActorMetadata> Result;
+	for (const auto& LabeledObject : LabeledObjects)
+	{
+		if (LabeledObject.Value.InstanceId == NoLabelId)
+		{
+			continue;
+		}
+
+		const AActor* Actor = ResolveRepresentativeActor(LabeledObject.Key);
+		if (!Actor)
+		{
+			continue;
+		}
+
+		FTempoInstanceActorMetadata Metadata;
+		Metadata.InstanceId = LabeledObject.Value.InstanceId;
+		Metadata.SemanticId = LabeledObject.Value.SemanticId;
+		if (const FGuid* ActorGuid = ActorGuids.Find(Actor))
+		{
+			Metadata.ActorGuid = ActorGuid->ToString(EGuidFormats::DigitsWithHyphensLower);
+		}
+		Metadata.ActorName = Actor->GetActorNameOrLabel();
+		Metadata.ActorPath = Actor->GetPathName();
+
+		Result.FindOrAdd(static_cast<uint8>(Metadata.InstanceId)) = MoveTemp(Metadata);
+	}
+	return Result;
+}
+
 void UTempoActorLabeler::GetInstanceToSemanticIdMap(const TempoScripting::Empty& Request, const TResponseDelegate<TempoLabels::InstanceToSemanticIdMap>& ResponseContinuation)
 {
 	TMap<uint8, uint8> Map = GetInstanceToSemanticIdMap();
@@ -346,6 +377,7 @@ void UTempoActorLabeler::LabelActor(AActor* Actor)
 	}
 
 	LabeledObjects.Add(Actor, ActorIdPair);
+	FindOrAddActorGuid(Actor);
 
 	LabelAllComponents(Actor, ActorIdPair);
 }
@@ -430,6 +462,7 @@ void UTempoActorLabeler::UnLabelAllActors()
 	
 	// Clear the set of labeled actor class names
 	LabeledActorClassNames.Empty();
+	ActorGuids.Empty();
 }
 
 void UTempoActorLabeler::UnLabelActor(AActor* Actor)
@@ -451,6 +484,7 @@ void UTempoActorLabeler::UnLabelActor(AActor* Actor)
 	}
 
 	LabeledObjects.Remove(Actor);
+	ActorGuids.Remove(Actor);
 }
 
 void UTempoActorLabeler::UnLabelAllComponents(const AActor* Actor)
@@ -512,6 +546,24 @@ void UTempoActorLabeler::AssignId(UPrimitiveComponent* Component, const FInstanc
 	{
 		Component->SetCustomDepthStencilValue(StencilValue);
 	}
+}
+
+const AActor* UTempoActorLabeler::ResolveRepresentativeActor(const UObject* LabeledObject)
+{
+	if (const AActor* Actor = Cast<AActor>(LabeledObject))
+	{
+		return Actor;
+	}
+	if (const UActorComponent* Component = Cast<UActorComponent>(LabeledObject))
+	{
+		return Component->GetOwner();
+	}
+	return nullptr;
+}
+
+FGuid& UTempoActorLabeler::FindOrAddActorGuid(const AActor* Actor)
+{
+	return ActorGuids.FindOrAdd(Actor, FGuid::NewGuid());
 }
 
 FName UTempoActorLabeler::GetActorClassification(const AActor* Actor) const
