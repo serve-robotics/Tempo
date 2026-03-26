@@ -28,7 +28,7 @@
  * @param Height Image height in pixels
  * @return Map of instance ID to bounding box
  */
-static TMap<int32, FBox2D> ComputeBoundingBoxes(const TArray<uint8>& LabelData, uint32 Width, uint32 Height)
+static TMap<int32, FBox2D> ComputeBoundingBoxes(const TArray<uint8>& LabelData, uint32 Width, uint32 Height);
 // Root-Finding Solver (Newton-Raphson)
 static double Solve(const TFunction<double(double)>& Objective, const TFunction<double(double)>& Derivative, const double InitialGuess, const int32 MaxIter, const double Threshold)
 {
@@ -86,21 +86,6 @@ static double SolveInverseDistortion(double TargetRadius, double K1, double K2, 
  */
 static TMap<int32, FBox2D> ComputeBoundingBoxes(const TArray<uint8>& LabelData, uint32 Width, uint32 Height)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(ComputeBoundingBoxes);
-
-	TMap<int32, FBox2D> Boxes;
-	for (uint32 Y = 0; Y < Height; ++Y)
-	{
-		for (uint32 X = 0; X < Width; ++X)
-		{
-			const uint8 InstanceId = LabelData[Y * Width + X];
-			if (InstanceId > 0)  // 0 = unlabeled
-			{
-				Boxes.FindOrAdd(InstanceId) += FUintPoint(X, Y);
-			}
-		}
-	}
-	return Boxes;
 	TRACE_CPUPROFILER_EVENT_SCOPE(ComputeBoundingBoxes);
 
 	TMap<int32, FBox2D> Boxes;
@@ -617,45 +602,6 @@ void UTempoCamera::RequestMeasurement(const TempoCamera::BoundingBoxesRequest& R
 FTempoCameraIntrinsics UTempoCamera::GetIntrinsics() const
 {
 	return FTempoCameraIntrinsics(SizeXY, DistortedFOV);
-}
-
-FString UTempoCamera::GetOwnerName() const
-{
-	check(GetOwner());
-
-	return GetOwner()->GetActorNameOrLabel();
-}
-
-FString UTempoCamera::GetSensorName() const
-{
-	return GetName();
-}
-
-bool UTempoCamera::IsAwaitingRender()
-{
-	return IsNextReadAwaitingRender();
-}
-
-void UTempoCamera::OnRenderCompleted()
-{
-	ReadNextIfAvailable();
-}
-
-void UTempoCamera::BlockUntilMeasurementsReady() const
-{
-	BlockUntilNextReadComplete();
-}
-
-TOptional<TFuture<void>> UTempoCamera::SendMeasurements()
-{
-	TOptional<TFuture<void>> Future;
-
-	if (TUniquePtr<FTextureRead> TextureRead = DequeueIfReadComplete())
-	{
-		Future = DecodeAndRespond(MoveTemp(TextureRead));
-	}
-
-	return Future;
 }
 
 FString UTempoCamera::GetOwnerName() const
