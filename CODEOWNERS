@@ -1,0 +1,4 @@
+.github/workflows/security*     @serve-robotics/security
+CODEOWNERS                      @serve-robotics/security
+SEC-SCS                         @serve-robotics/security
+
