@@ -283,13 +283,7 @@ protected:
 	// Gets the number of pending texture reads
 	int32 NumPendingTextureReads() const { return TextureReadQueue.Num(); }
 
-private:
-	// Starts or restarts the timer that calls MaybeCapture
-	void RestartCaptureTimer();
-
-	// Capture a frame, if any client has requested one.
-	void MaybeCapture();
-
+protected:
 	// Our Queue of pending texture reads.
 	FTextureReadQueue TextureReadQueue;
 
@@ -302,6 +296,13 @@ private:
 	// We must copy our TextureTarget's resource here before reading it on the CPU
 	// because USceneCaptureComponent's RenderTarget is not set up to do so.
 	FTextureRHIRef TextureRHICopy;
+
+private:
+	// Starts or restarts the timer that calls MaybeCapture
+	void RestartCaptureTimer();
+
+	// Capture a frame, if any client has requested one.
+	void MaybeCapture();
 
 	FTimerHandle TimerHandle;
 };
