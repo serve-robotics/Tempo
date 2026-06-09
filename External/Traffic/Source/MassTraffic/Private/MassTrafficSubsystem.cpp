@@ -627,10 +627,11 @@ void UMassTrafficSubsystem::BuildLaneData(FMassTrafficZoneGraphData& TrafficZone
 		else
 		{
 			// If there turned out to be no next lanes (dead-end), use TrafficLane.ConstData.MinNextLaneSpeedLimit
-			// to have traffic come to a natural stop at the end of the lane. 
+			// to have traffic come to a natural stop at the end of the lane.
 			TrafficLaneData.ConstData.AverageNextLanesSpeedLimit = 0.0f;
 		}
 	}
+
 }
 
 void UMassTrafficSubsystem::RegisterField(UMassTrafficFieldComponent* Field)
