@@ -82,6 +82,12 @@ public:
 
 	// Road Module Distance Queries
 
+	// Connection filtering — return true to block a walkable lane connection to OtherConnectionActor.
+	// Default allows all connections; override to apply topology rules (e.g. clockwise-only corner arcs).
+	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Tempo Agents|Road Module Interface|Queries")
+	bool ShouldFilterTempoLaneConnection(const AActor* OtherConnectionActor) const;
+	virtual bool ShouldFilterTempoLaneConnection_Implementation(const AActor* OtherConnectionActor) const { return false; }
+
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Tempo Agents|Road Module Interface|Queries")
 	float GetDistanceAlongTempoRoadModuleClosestToWorldLocation(FVector QueryLocation) const;
 	

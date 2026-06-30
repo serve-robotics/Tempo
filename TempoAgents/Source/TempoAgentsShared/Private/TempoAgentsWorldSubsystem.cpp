@@ -250,6 +250,24 @@ void UTempoAgentsWorldSubsystem::SetupIntersectionLaneMap()
 				return false;
 			}
 
+			// When the query box captures crosswalk lanes from an adjacent approach (e.g. in dense
+			// intersections), keep only the 2 lanes whose midpoints are closest to IntersectionQueryLocation.
+			if (CrosswalkLaneHandles.Num() > 2)
+			{
+				CrosswalkLaneHandles.Sort([&ZoneGraphStorage, &IntersectionQueryLocation](const FZoneGraphLaneHandle& A, const FZoneGraphLaneHandle& B)
+				{
+					auto LaneMidpoint = [&ZoneGraphStorage](const FZoneGraphLaneHandle& H) -> FVector
+					{
+						const FZoneLaneData& LD = ZoneGraphStorage->Lanes[H.Index];
+						const int32 Mid = (LD.PointsBegin + LD.PointsEnd) / 2;
+						return ZoneGraphStorage->LanePoints[Mid];
+					};
+					return FVector::DistSquared(LaneMidpoint(A), IntersectionQueryLocation)
+					     < FVector::DistSquared(LaneMidpoint(B), IntersectionQueryLocation);
+				});
+				CrosswalkLaneHandles.SetNum(2);
+			}
+
 			if (!ensureMsgf(CrosswalkLaneHandles.Num() == 2, TEXT("Expected exactly 2 crosswalk lanes in FindIntersectionAndCrosswalkLanePairings.  But, found %d for IntersectionQueryActor: %s at ConnectionIndex: %d."), CrosswalkLaneHandles.Num(), *IntersectionQueryActor.GetName(), ConnectionIndex))
 			{
 				return false;
