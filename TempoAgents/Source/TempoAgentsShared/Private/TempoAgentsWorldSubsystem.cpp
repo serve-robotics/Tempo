@@ -338,6 +338,15 @@ void UTempoAgentsWorldSubsystem::SetupIntersectionLaneMap()
 		
 		for (int32 ConnectionIndex = 0; ConnectionIndex < NumConnections; ++ConnectionIndex)
 		{
+			// Skip connections where the intersection actor intentionally suppresses crosswalk generation
+			// (e.g. touching-intersection shared boundaries, through-roads, narrow shoulders).
+			// Without this guard the lane query finds road lanes but zero crosswalk lanes and fires a
+			// fatal ensure — crashing pedestrian navigation for ALL intersections.
+			if (!UTempoCoreUtils::CallBlueprintFunction(&IntersectionQueryActor, ITempoCrosswalkInterface::Execute_ShouldGenerateZoneShapesForTempoCrosswalk, ConnectionIndex))
+			{
+				continue;
+			}
+
 			TArray<FRoadAndCrosswalkLaneInfo> ExitRoadAndCrosswalkLaneInfos;
 			if (TryFindIntersectionAndCrosswalkLanePairings(IntersectionQueryActor, ConnectionIndex, -1, ExitRoadAndCrosswalkLaneInfos))
 			{
