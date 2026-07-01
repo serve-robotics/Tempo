@@ -24,6 +24,8 @@ void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 
 	// Get subsystems
 	UWorld* World = GetWorld();
+	UE_LOG(LogMassTraffic, Warning, TEXT("VehicleSpawnDataGenerator::Generate() called — World=%s Count=%d EntityTypes=%d"),
+		World ? *World->GetName() : TEXT("null"), Count, EntityTypes.Num());
 	UMassTrafficSubsystem* MassTrafficSubsystem = UWorld::GetSubsystem<UMassTrafficSubsystem>(World);
 	UZoneGraphSubsystem* ZoneGraphSubsystem = UWorld::GetSubsystem<UZoneGraphSubsystem>(World);
 	check(MassTrafficSubsystem);
@@ -109,9 +111,15 @@ void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 
 	// Find potential spawn points.
 	TArray<TArray<FZoneGraphLaneLocation>> SpawnPointsPerSpacing;
+	UE_LOG(LogMassTraffic, Warning, TEXT("VehicleSpawnDataGenerator::Generate() — TrafficZoneGraphData count=%d"),
+		MassTrafficSubsystem->GetTrafficZoneGraphData().Num());
 	for (const FMassTrafficZoneGraphData& TrafficZoneGraphData : MassTrafficSubsystem->GetTrafficZoneGraphData())
 	{
 		const FZoneGraphStorage* ZoneGraphStorage = ZoneGraphSubsystem->GetZoneGraphStorage(TrafficZoneGraphData.DataHandle);
+		UE_LOG(LogMassTraffic, Warning, TEXT("VehicleSpawnDataGenerator::Generate() — DataHandle(Index=%d Gen=%d) storage=%s Lanes=%d"),
+			TrafficZoneGraphData.DataHandle.Index, TrafficZoneGraphData.DataHandle.Generation,
+			ZoneGraphStorage ? TEXT("valid") : TEXT("NULL"),
+			ZoneGraphStorage ? ZoneGraphStorage->Lanes.Num() : -1);
 		if (!ZoneGraphStorage)
 		{
 			continue;
@@ -225,6 +233,10 @@ void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 	}
 
 	// Return results
+	int32 TotalEntitiesToSpawn = 0;
+	for (const FMassEntitySpawnDataGeneratorResult& R : Results) { TotalEntitiesToSpawn += R.NumEntities; }
+	UE_LOG(LogMassTraffic, Warning, TEXT("VehicleSpawnDataGenerator — calling delegate: Results=%d TotalEntities=%d"),
+		Results.Num(), TotalEntitiesToSpawn);
 	FinishedGeneratingSpawnPointsDelegate.Execute(Results);
 }
 
