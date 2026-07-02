@@ -11,29 +11,29 @@ Unreal uses centimeters, degrees, and a left-handed coordinate system natively. 
 Name matching via `TempoWorld`'s APIs is **not** case sensitive*. 
 
 ## World State
-TempoWorld supports querying the state of Actors in the World. This includes RPCs to get (right now) or stream (continuously) the state of Actors, where the state includes the name, transform, linear and angular velocity, 3D bounds, and the timestamp when the state was captured. For example:
+TempoWorld supports querying the state of Actors in the World. This includes RPCs to get (right now) or stream (continuously) the state of Actors, where the state includes the name, transform, 6-DoF velocity (linear m/s, angular rad/s), 3D bounds, and the timestamp when the state was captured. For example:
 ```
-import tempo.tempo_world as tw
+import tempo_sim.tempo_world as tw
 
 # Get MyActor's state right now
-tw.get_current_actor_state(actor_name="MyActor")
+tw.get_current_actor_state(actor="MyActor")
 # Start a stream of MyActor's state
-for state in tw.stream_actor_state(actor_name="MyActor"):
+for state in tw.stream_actor_state(actor="MyActor"):
 ```
 Often you may be interested in the states not of all Actors but only the ones near the one you are controlling or collecting data from. For this reason, TempoWorld includes RPCs to get or stream the states of all Actors *near* another Actor. For example:
 ```
-import tempo.tempo_world as tw
+import tempo_sim.tempo_world as tw
 
 # Get the state of all Actors within 50 meters of MyActor (including MyActor itself) right now
-tw.get_current_actor_states_near(near_actor_name="MyActor", search_radius=50.0)
+tw.get_current_actor_states_near(near_actor="MyActor", search_radius_m=50.0)
 # Start a stream of all such Actor states
-for state in tw.stream_actor_states_near(near_actor_name="MyActor", search_radius=50.0):
+for state in tw.stream_actor_states_near(near_actor="MyActor", search_radius_m=50.0):
 ```
 You may also be interested in knowing if one Actor has overlapped another. `TempoWorld` has a streaming RPC for this. For example:
 ```
-import tempo.tempo_world as tw
+import tempo_sim.tempo_world as tw
 
-for overlap_event in tw.stream_overlap_events(actor_name="MyActor"):
+for overlap_event in tw.stream_overlap_events(actor="MyActor"):
 ```
 
 ## Actor, Component, and Property Control
@@ -42,20 +42,20 @@ TempoWorld lets you control the state of the simulated world.
 ### Spawning or Destroying Actors
 To spawn an Actor you must specify its `type` (Unreal Class name). This can be any C++ or Blueprint class in the project. You may also specify a transform and, optionally, an other actor to which that transform is relative. Lastly, you can specify that the spawn should be "deferred", meaning the Actor will be created but left in an invisible, unfinished state where you can set its properties before finishing the spawn. For example:
 ```
-import tempo.tempo_world as tw
-import TempoScripting.Geometry_pb2 as Geometry
+import tempo_sim.tempo_world as tw
+import tempo_sim.TempoCore.Geometry_pb2 as Geometry
 
 t = Geometry.transform()
 t.location.x = 1
 spawn_response = tw.spawn_actor(type="MyCPPOrBPActorClass", deferred=True, transform=t, relative_to_actor="SomeOtherActor")
 # The Actor exists but is invisible to all others - this is your chance to supply any custom properties
-finish_spawn_response = tw.finish_spawning_actor(actor=spawn_response.spawned_name)
+finish_spawn_response = tw.finish_spawning_actor(actor=spawn_response.name)
 ```
 Note that both the spawn actor and finish spawning actor RPCs return a transform. If spawning at the transform you provided would have resulted in a collision with another Actor Unreal will attempt to find a new transform nearby to spawn your new Actor. This is the transform that will be returned.
 
 You can also destroy any Actor in the world by name. For example:
 ```
-import tempo.tempo_world as tw
+import tempo_sim.tempo_world as tw
 
 tw.destroy_actor(actor="ActorToDestroy")
 ```
@@ -63,8 +63,8 @@ tw.destroy_actor(actor="ActorToDestroy")
 ### Adding and Destroying Components
 TempoWorld supports adding and removing components in the editor or at runtime. For example:
 ```
-import tempo.tempo_world as tw
-import TempoScripting.Geometry_pb2 as Geometry
+import tempo_sim.tempo_world as tw
+import tempo_sim.TempoCore.Geometry_pb2 as Geometry
 
 t = Geometry.transform()
 tw.add_component(type="MyCPPOrBPComponentClass", actor="OwnerActor", name="OptionalCustomName", parent="OptionalParentComponent", transform=t, socket="OptionalSocket")
@@ -74,8 +74,8 @@ tw.destroy_component(actor="OwnerActor", component="MyComponent")
 ### Manipulating Actors and Components
 TempoWorld supports setting transforms of Actors and Components. For example:
 ```
-import tempo.tempo_world as tw
-import TempoScripting.Geometry_pb2 as Geometry
+import tempo_sim.tempo_world as tw
+import tempo_sim.TempoCore.Geometry_pb2 as Geometry
 
 t = Geometry.transform()
 tw.set_actor_transform(actor="MyActor", transform=t, relative_to_actor="OptionalRelativeActor")
@@ -85,7 +85,7 @@ tw.set_component_transform(actor="OwnerActor", component="MyComponent", transfor
 ### Getting and Setting Properties
 TempoWorld uses Unreal's reflection system to allow getting or setting the value of any UProperty by name. Sometimes you might not know the exact name of the Actor, Component, or property you want to set at runtime. For this reason RPCs to inspect properties are available. For example:
 ```
-import tempo.tempo_world as tw
+import tempo_sim.tempo_world as tw
 
 all_actors_response = tw.get_all_actors()
 for actor in all_actors_response.actors:
@@ -104,27 +104,68 @@ Once you do know the name of the Actor, Component, and Property you want to set 
 | Set Property Type    | Unreal Type |
 | ------------- | ------------- |
 | `set_bool_property`          | bool              |
-| `set_string_property`        | FString or FName  |
+| `set_string_property`        | FString, FName, or FText |
 | `set_enum_property`          | TEnumAsByte or raw Enum |
-| `set_int_property`           | int32             |
+| `set_int_property`           | int32 (also accepts int8/int16/uint16 with range check, and TEnumAsByte) |
+| `set_int64_property`         | int64 (also accepts uint32/uint64 with range check) |
 | `set_float_property`         | double or float   |
 | `set_vector_property`        | FVector           |
+| `set_vector2d_property`      | FVector2D         |
+| `set_int_vector_property`    | FIntVector        |
+| `set_int_point_property`     | FIntPoint         |
 | `set_rotator_property`       | FRotator          |
+| `set_quat_property`          | FQuat             |
+| `set_transform_property`     | FTransform        |
 | `set_color_property`         | FColor or FLinearColor           |
-| `set_class_property`         | UClass* or TSubclassOf (by name) |
-| `set_asset_property`         | Asset (by name)   |
+| `set_class_property`         | UClass*, TSubclassOf, or TSoftClassPtr (by name) |
+| `set_asset_property`         | Asset, TSoftObjectPtr (by path/name) |
 | `set_actor_property`         | AActor* (by name) |
-| `set_component_property`     | UActorComponent* (by name)       |
+| `set_component_property`     | UActorComponent* (by name, as `ActorName:ComponentName`) |
 
-All of the above also have `set_*_array_property` RPCs to set an array of such properties.
+All of the above (except the struct types `vector`, `vector2d`, `int_vector`, `int_point`, `rotator`, `quat`, `transform`, and `color`) also have `set_*_array_property` and `set_*_set_property` RPCs to replace the entire contents of a `TArray` or `TSet` property in one call.
 
-TempoWorld also supports setting individual properties in structs and arrays, with the syntax `MyStruct.InnerProperty` and `MyArray[0]`, respectively. It also supports arbitrarily deep nesting of properties. Array indices must be either already present in the array or one past the length of the array (to extend the array by one element).
+TempoWorld also supports setting individual properties in structs, arrays, and maps, with the syntax `MyStruct.InnerProperty`, `MyArray[0]`, and `MyMap[key]`, respectively. It also supports arbitrarily deep nesting of properties. Array indices must be either already present in the array or one past the length of the array (to extend the array by one element). Map keys that don't yet exist are inserted.
 
-TempoWorld does not yet support setting properties in maps or sets. Check back soon for that!
+`TSet` element-level addressing is not supported (a set element is its own identity, so there's nothing to address into); use `set_*_set_property` to replace a set's contents.
 
 > [!Warning]
-> While the values you set for rotators will be converted from radians to degrees, the values you set for floats and vectors will not be converted (so, these should be specified in centimeters if they represent distances). We don't feel it is safe to assume that these quantities always represent distances.
+> While the values you set for rotators and quaternions will be converted from radians/right-handed to degrees/left-handed, the values you set for floats and vector-shaped types (`vector`, `vector2d`, `int_vector`, `int_point`) will not be converted (so, these should be specified in centimeters if they represent distances). We don't feel it is safe to assume that these quantities always represent distances. `set_transform_property` is the one exception: it follows the same convention as `spawn_actor` and `set_actor_transform`, converting the location from meters to centimeters and the rotation from radians/right-handed to degrees/left-handed, since transforms almost always represent world-frame poses.
 
-## Map Query Service
+### Batching Property Sets
+When you need to apply multiple property changes together, the `set_properties` RPC accepts a list of any of the singular set-property ops above and runs them in order in a single call. To avoid building op messages by hand, the generated clients include a fluent `Batch` builder with one method per supported type, named after its singular counterpart. The response contains one entry per *failed* op (by index); an empty `failures` list means every op succeeded.
 
-If your simulator includes a lane graph built with the ZoneGraph plugin, the map query service can get or stream the lane graph, including connectivity of lanes, as well as the accessibility of connected lanes (as determined by traffic controls).
+In Python:
+```
+from tempo_sim import tempo_world
+
+response = (
+    tempo_world.batch()
+        .set_bool_property(actor="MyActor", property="bEnabled", value=True)
+        .set_float_property(actor="MyActor", property="MaxSpeed", value=42.0)
+        .set_vector_property(actor="MyActor", component="Mesh", property="RelativeLocation", x=0.0, y=0.0, z=150.0)
+        .set_string_array_property(actor="MyActor", property="WaypointTags", values=["alpha", "bravo", "charlie"])
+        .execute()
+)
+
+for failure in response.failures:
+    print(f"op {failure.op_index} failed (code={failure.code}): {failure.error}")
+```
+Each `set_*_property` method takes the same keyword args as the corresponding free function, and `execute_async` is available for use with `await`.
+
+In Rust:
+```
+use tempo_sim::tempo_world;
+
+let response = tempo_world::batch()
+    .set_bool_property("MyActor".into(), "".into(), "bEnabled".into(), true)
+    .set_float_property("MyActor".into(), "".into(), "MaxSpeed".into(), 42.0)
+    .set_vector_property("MyActor".into(), "Mesh".into(), "RelativeLocation".into(), 0.0, 0.0, 150.0)
+    .set_string_array_property("MyActor".into(), "".into(), "WaypointTags".into(),
+        vec!["alpha".into(), "bravo".into(), "charlie".into()])
+    .execute()?;
+
+for failure in &response.failures {
+    eprintln!("op {} failed (code={}): {}", failure.op_index, failure.code, failure.error);
+}
+```
+Args are positional and match the request message's field order (`actor, component, property, value/values/...`), the same as the singular `tempo_world::set_*_property` wrappers. `execute_async().await` is available for async callers.

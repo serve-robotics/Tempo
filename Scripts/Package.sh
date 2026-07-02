@@ -7,6 +7,14 @@ PROJECT_ROOT=$("$SCRIPT_DIR"/FindProjectRoot.sh)
 cd "$PROJECT_ROOT"
 PROJECT_NAME=$(find . -maxdepth 1 -name "*.uproject" -exec basename {} .uproject \;)
 
+# Check for low memory mode flag
+LOW_MEMORY_MODE=false
+for arg in "$@"; do
+  if [[ "$arg" == "--low-memory" ]]; then
+    LOW_MEMORY_MODE=true
+  fi
+done
+
 export UNREAL_ENGINE_PATH=$("$SCRIPT_DIR"/FindUnreal.sh)
 
 FIND_UPROJECT() {
@@ -38,6 +46,10 @@ HOST_PLATFORM=""
 TARGET_PLATFORM=""
 if [[ "$OSTYPE" = "msys" ]]; then
   HOST_PLATFORM="Win64"
+  # 8.3 short form removes the space in "Program Files" so PWD is spaces-free
+  # when we invoke .bat files — otherwise cmd.exe's strip-outer-quotes rule
+  # mangles the path when another argument (e.g. -project=...) is also quoted.
+  export UNREAL_ENGINE_PATH=$(cygpath -w -s "$UNREAL_ENGINE_PATH")
   if [ "$1" = "Linux" ]; then
     if [ -z ${LINUX_MULTIARCH_ROOT+x} ]; then
       echo "LINUX_MULTIARCH_ROOT not set, cannot cross-compile for Linux"
@@ -71,7 +83,7 @@ fi
 cd "$UNREAL_ENGINE_PATH"
 
 # Build the base command with common arguments
-PACKAGE_COMMAND="Turnkey -command=VerifySdk -platform=$TARGET_PLATFORM -UpdateIfNeeded -project=\"$PROJECT_ROOT/$PROJECT_NAME.uproject\" BuildCookRun -nop4 -utf8output -nocompileeditor -skipbuildeditor -cook -target=\"$PROJECT_NAME\" -platform=$TARGET_PLATFORM -project=\"$PROJECT_ROOT/$PROJECT_NAME.uproject\" -installed -stage -package -pak -build -iostore -prereqs -clientconfig=Development"
+PACKAGE_COMMAND="Turnkey -command=VerifySdk -platform=$TARGET_PLATFORM -UpdateIfNeeded -project=\"$PROJECT_ROOT/$PROJECT_NAME.uproject\" BuildCookRun -nop4 -utf8output -nocompileeditor -skipbuildeditor -cook -target=\"$PROJECT_NAME\" -platform=$TARGET_PLATFORM -project=\"$PROJECT_ROOT/$PROJECT_NAME.uproject\" -installed -stage -package -pak -build -prereqs -clientconfig=Development"
 
 # Add platform-specific parts
 if [ "$HOST_PLATFORM" = "Win64" ]; then
@@ -90,8 +102,22 @@ if [ "$TEMPOROS_ENABLED" = "true" ]; then
   PACKAGE_COMMAND="$PACKAGE_COMMAND -ScriptDir=\"$PROJECT_ROOT/Plugins/Tempo/TempoROS/Scripts\""
 fi
 
+# Add low memory options if requested
+if [ "$LOW_MEMORY_MODE" = "true" ]; then
+  PACKAGE_COMMAND="$PACKAGE_COMMAND -CookPartialGC -NoXGE -AdditionalCookerOptions=\"-cookprocesscount=1\""
+  echo "Low memory mode enabled: single cook process, partial GC, no XGE"
+fi
+
+# Filter out our custom flags before passing to UAT
+PASSTHROUGH_ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" != "--low-memory" ]]; then
+    PASSTHROUGH_ARGS+=("$arg")
+  fi
+done
+
 # Execute the command with any additional arguments
-eval "$PACKAGE_COMMAND \"\$@\""
+eval "$PACKAGE_COMMAND" "${PASSTHROUGH_ARGS[@]}"
 
 # Copy cook metadata (including chunk manifests) to the package directory
 if [[ "$TARGET_PLATFORM" = "Win64" ]]; then
@@ -100,4 +126,108 @@ if [[ "$TARGET_PLATFORM" = "Win64" ]]; then
 else
   cp -r "$PROJECT_ROOT/Saved/Cooked/$TARGET_PLATFORM/$PROJECT_NAME/Metadata" "$PROJECT_ROOT/Packaged"
   cp -r "$PROJECT_ROOT/Saved/Cooked/$TARGET_PLATFORM/$PROJECT_NAME/AssetRegistry.bin" "$PROJECT_ROOT/Packaged"
+fi
+
+# Copy generated Rust crate(s) to Packaged/API/Rust/ so downstream consumers can
+# build a Rust client against this packaged build. Only ships the files that
+# `cargo package` would include — same as the publish artifact, minus target/,
+# Cargo.lock, tempo_proto_includes/, etc. Source of truth is each crate's
+# `include = [...]` field; `cargo package --list` honors it.
+PACKAGE_RUST_CRATE() {
+  local CRATE_DIR="$1"
+  local CRATE_MANIFEST="$CRATE_DIR/Cargo.toml"
+  if [[ ! -f "$CRATE_MANIFEST" ]]; then
+    return 0
+  fi
+  local CRATE_NAME
+  # POSIX [[:space:]] (not \s — BSD/macOS sed doesn't support \s and would leave the value as the
+  # whole `name = "..."` line, creating a directory with spaces in its name).
+  CRATE_NAME=$(grep -m1 '^name' "$CRATE_MANIFEST" | sed -E 's/^name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+  local DEST="$PROJECT_ROOT/Packaged/API/Rust/$CRATE_NAME"
+  echo "Packaging Rust crate $CRATE_NAME -> $DEST"
+  # `--no-verify` skips the compile-the-extracted-crate step, so this works
+  # even when a path dep (e.g. tempo-sim) isn't on crates.io yet. Capture the
+  # file list (stdout) and check the exit status so a `cargo package` failure
+  # surfaces instead of silently shipping an empty crate dir; cargo's own
+  # warnings/errors still go to the terminal via stderr.
+  local FILE_LIST
+  if ! FILE_LIST=$(cd "$CRATE_DIR" && cargo package --list --no-verify --allow-dirty); then
+    echo "Error: 'cargo package --list' failed for $CRATE_NAME; leaving any prior package untouched." >&2
+    return 1
+  fi
+  rm -rf "$DEST"
+  mkdir -p "$DEST"
+  printf '%s\n' "$FILE_LIST" | \
+    grep -vE '^(Cargo\.lock|Cargo\.toml\.orig|\.cargo_vcs_info\.json)$' | \
+    while IFS= read -r rel; do
+      if [[ -f "$CRATE_DIR/$rel" ]]; then
+        mkdir -p "$DEST/$(dirname "$rel")"
+        cp "$CRATE_DIR/$rel" "$DEST/$rel"
+      fi
+    done
+}
+
+# Only package the Rust crate(s) when Rust generation is opted in via
+# TEMPO_GEN_RUST_API (same gate as gen_rust_api.py / GenRustAPI.sh); otherwise
+# the crates are absent or stale and shouldn't be shipped.
+if [[ -n "$TEMPO_GEN_RUST_API" && "$TEMPO_GEN_RUST_API" != "0" ]]; then
+  if command -v cargo >/dev/null 2>&1; then
+    PACKAGE_RUST_CRATE "$PROJECT_ROOT/Plugins/Tempo/TempoCore/Content/Rust/API"
+    PACKAGE_RUST_CRATE "$PROJECT_ROOT/Content/Rust/API"
+  else
+    echo "Skipping Rust crate packaging: cargo not on PATH"
+  fi
+fi
+
+# Build the generated Python package(s) (sdist + wheel) into
+# Packaged/API/Python/<dist-name>/ so downstream consumers can `pip install` a
+# Python client against this packaged build. Mirrors PACKAGE_RUST_CRATE.
+PYTHON_BIN=""
+# Prefer Tempo's managed venv (TempoEnv, created by the build's GenAPI step). It has the build
+# toolchain (`build`, via requirements.txt) and the package's own deps. Fall back to a system python.
+for candidate in \
+  "$PROJECT_ROOT/TempoEnv/bin/python3" \
+  "$PROJECT_ROOT/TempoEnv/bin/python" \
+  "$PROJECT_ROOT/TempoEnv/Scripts/python.exe" \
+  python3 python; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    PYTHON_BIN="$candidate"
+    break
+  fi
+done
+
+PACKAGE_PYTHON_PACKAGE() {
+  local PKG_DIR="$1"
+  local PYPROJECT="$PKG_DIR/pyproject.toml"
+  if [[ ! -f "$PYPROJECT" ]]; then
+    return 0
+  fi
+  local DIST_NAME
+  # POSIX [[:space:]] (not \s — BSD/macOS sed doesn't support \s and would leave the value as the
+  # whole `name = "..."` line, creating a directory with spaces in its name).
+  DIST_NAME=$(grep -m1 '^name' "$PYPROJECT" | sed -E 's/^name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+  local DEST="$PROJECT_ROOT/Packaged/API/Python/$DIST_NAME"
+  echo "Packaging Python package $DIST_NAME -> $DEST"
+  rm -rf "$DEST"
+  mkdir -p "$DEST"
+  if "$PYTHON_BIN" -c "import build" >/dev/null 2>&1; then
+    # Preferred: `python -m build` produces an sdist (.tar.gz) and a wheel (.whl) in --outdir.
+    (cd "$PKG_DIR" && "$PYTHON_BIN" -m build --outdir "$DEST") || \
+      echo "Warning: failed to build Python package $DIST_NAME"
+  else
+    # Fallback: build just the wheel via pip's PEP 517 frontend, which needs no `build` module.
+    # --no-deps so only this package's wheel lands in DEST (not its dependencies').
+    echo "  ('build' module unavailable; producing a wheel via pip — no sdist)"
+    "$PYTHON_BIN" -m pip wheel --no-deps --wheel-dir "$DEST" "$PKG_DIR" || \
+      echo "Warning: failed to build Python wheel for $DIST_NAME"
+  fi
+}
+
+# Package whenever any Python interpreter is available. The wheel is built either way (via `build`
+# if present, else pip); only a complete absence of Python skips it.
+if [[ -n "$PYTHON_BIN" ]]; then
+  PACKAGE_PYTHON_PACKAGE "$PROJECT_ROOT/Plugins/Tempo/TempoCore/Content/Python/API"
+  PACKAGE_PYTHON_PACKAGE "$PROJECT_ROOT/Content/Python/API"
+else
+  echo "Skipping Python package build: no python interpreter available"
 fi

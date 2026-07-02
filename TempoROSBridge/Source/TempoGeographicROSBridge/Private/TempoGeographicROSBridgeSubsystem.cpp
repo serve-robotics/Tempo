@@ -12,16 +12,16 @@
 void UTempoGeographicROSBridgeSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
-	
+
 	if (InWorld.WorldType != EWorldType::Game && InWorld.WorldType != EWorldType::PIE)
 	{
 		return;
 	}
 
 	ROSNode = UTempoROSNode::Create("TempoGeographic", this);
-	
-	BindScriptingServiceToROS<FTempoSetDayCycleRateService>(ROSNode, "SetDayCycleRate", this, &UTempoGeographicROSBridgeSubsystem::SetDayCycleRelativeRate);
-	BindScriptingServiceToROS<FTempoSetTimeOfDayService>(ROSNode, "SetTimeOfDay", this, &UTempoGeographicROSBridgeSubsystem::SetTimeOfDay);
-	BindScriptingServiceToROS<FTempoSetGeographicReferenceService>(ROSNode, "SetGeographicReference", this, &UTempoGeographicROSBridgeSubsystem::SetGeographicReference);
-	BindScriptingServiceToROS<FTempoGetDateTimeService>(ROSNode, "GetDateTime", this, &UTempoGeographicROSBridgeSubsystem::GetDateTime);
+
+	BindServiceToROS<FTempoSetDayCycleRateService>(ROSNode, "SetDayCycleRate", this, &UTempoGeographicROSBridgeSubsystem::SetDayCycleRelativeRate);
+	BindServiceToROS<FTempoSetTimeOfDayService>(ROSNode, "SetTimeOfDay", this, &UTempoGeographicROSBridgeSubsystem::SetTimeOfDay);
+	BindServiceToROS<FTempoSetGeographicReferenceService>(ROSNode, "SetGeographicReference", this, &UTempoGeographicROSBridgeSubsystem::SetGeographicReference);
+	BindServiceToROS<FTempoGetDateTimeService>(ROSNode, "GetDateTime", this, &UTempoGeographicROSBridgeSubsystem::GetDateTime);
 }

@@ -18,32 +18,36 @@
 			"Name": "TempoSensors",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
-		},
-		{
-			"Name": "TempoSensorsShared",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
-		},
-		{
-			"Name": "TempoCamera",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
-		},
-		{
-			"Name": "TempoLabels",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
-		},
-		{
-			"Name": "TempoLidar",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
 		}
 	],
 	"Plugins": [
 		{
 			"Name": "TempoCore",
 			"Enabled": true
+		},
+		{
+			"Name": "AVCodecsCore",
+			"Enabled": true
+		},
+		{
+			"Name": "NVCodecs",
+			"Enabled": true,
+			"PlatformAllowList": [ "Win64", "Linux" ]
+		},
+		{
+			"Name": "AMFCodecs",
+			"Enabled": true,
+			"PlatformAllowList": [ "Win64" ]
+		},
+		{
+			"Name": "WMFCodecs",
+			"Enabled": true,
+			"PlatformAllowList": [ "Win64" ]
+		},
+		{
+			"Name": "VTCodecs",
+			"Enabled": true,
+			"PlatformAllowList": [ "Mac" ]
 		}
 	]
 }

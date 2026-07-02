@@ -19,12 +19,11 @@ public class TempoROSBridge : ModuleRules
 				// Tempo
 				"TempoSensorsROSBridge",
 				"TempoGeographicROSBridge",
-				"TempoTimeROSBridge",
+				"TempoCoreROSBridge",
 				"TempoMovementROSBridge",
-				"TempoScriptingROSBridge",
 			}
 			);
-		
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{

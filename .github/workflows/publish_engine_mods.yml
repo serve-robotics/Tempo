@@ -1,0 +1,271 @@
+# ======
+# Publish a Tempo Unreal Docker image with engine mods pre-applied to a container registry.
+# This reusable workflow builds the base Tempo Unreal Docker image (from the Epic-distributed image),
+# runs the Tempo engine-mods install script inside a container, then commits and pushes the resulting
+# image to a parameterized registry repository (image_name) tagged with <unreal_version>-<hashFiles(EngineMods/**)>.
+# A consumer build workflow can then `docker pull` this image instead of running the
+# "Initialize Engine Mods Cache" + "Install Engine Mods" steps each build.
+# The skip-if-tag-exists check makes the workflow idempotent on no-op merges to main.
+#
+# Target registry: defaults to ghcr.io using the GITHUB_TOKEN. To push elsewhere, set image_name to the
+# target host and either (a) pass registry/registry_username + the registry_password secret for a
+# static-credential registry (Docker Hub, GAR, ACR, Quay, ...), or (b) set aws_region (+ aws_role_to_assume
+# for OIDC, or the aws_access_key_id/aws_secret_access_key secrets) to push to AWS ECR.
+#
+# Note: The Epic *base* image is always pulled from ghcr.io (it is Epic-distributed); this is independent
+#       of where the modded image is pushed. A caller workflow must have EPIC_DOCKER_USERNAME and
+#       EPIC_DOCKER_TOKEN secrets. Same-org callers can pass them (and submodules_app_private_key) via
+#       'secrets: inherit'; callers in a DIFFERENT org must pass them explicitly under 'secrets:', since
+#       'secrets: inherit' does not cross org boundaries.
+# Note: When using OIDC for ECR (aws_role_to_assume), the caller's job must grant 'id-token: write'.
+# Note: After the first successful push to GHCR, set the package visibility to private via the package
+#       settings UI. Redistribution of UE-derived content publicly is not permitted by the UE EULA.
+#       (For ECR, repositories are private by default; create the repo ahead of time as ECR does not
+#       auto-create on push.)
+# ======
+
+name: Publish Pre-Modded Tempo Unreal Image
+
+on:
+  workflow_call:
+    inputs:
+      unreal_version:
+        type: string
+        required: true
+        description: Which Unreal version to publish for (5.6 or 5.7 are supported)
+      image_name:
+        type: string
+        required: true
+        description: Target image name without tag, including the registry host, e.g. ghcr.io/<owner>/tempo-unreal-modded or <acct>.dkr.ecr.<region>.amazonaws.com/tempo-unreal-modded
+      checkout_repo:
+        type: string
+        description: Repo to checkout (defaults to the caller's repo)
+        default: ${{ github.repository }}
+      checkout_ref:
+        type: string
+        description: Ref to checkout (defaults to the caller's sha)
+        default: ${{ github.sha }}
+      tempo_root:
+        type: string
+        description: Path to the Tempo source within the checkout
+        default: '.'
+      platform:
+        type: string
+        description: Runner platform
+        default: ubuntu-22.04
+      submodules_token:
+        type: string
+        description: Token to use for fetching submodules during checkout
+        default: ''
+      submodules_app_id:
+        type: string
+        description: GitHub App ID used to mint a token for fetching private submodules during checkout (alternative to submodules_token). Requires the submodules_app_private_key secret. Minting happens in this job, so it works across the reusable-workflow boundary where a token passed via submodules_token cannot (GitHub strips token-shaped values from job outputs).
+        default: ''
+      submodules_repositories:
+        type: string
+        description: Comma- or newline-separated repos to scope the minted submodules token to (default - all repos in the App installation). Only used when submodules_app_id is set.
+        default: ''
+      registry:
+        type: string
+        description: Registry host to authenticate to for the modded image (static-credential registries only, e.g. ghcr.io or docker.io). Must match the host in image_name. Ignored when aws_region is set (ECR).
+        default: ghcr.io
+      registry_username:
+        type: string
+        description: Username for static-credential registry login. Defaults to the triggering actor (correct for ghcr.io).
+        default: ${{ github.actor }}
+      aws_region:
+        type: string
+        description: If set, authenticate to AWS ECR in this region (instead of a static-credential login) and push there. Provide aws_role_to_assume (OIDC) or the aws_access_key_id/aws_secret_access_key secrets. The caller must grant id-token-write permission when using OIDC.
+        default: ''
+      aws_role_to_assume:
+        type: string
+        description: IAM role ARN to assume via GitHub OIDC for ECR auth. Takes precedence over the access-key secrets when both are provided.
+        default: ''
+    secrets:
+      submodules_app_private_key:
+        description: Private key (PEM) for the GitHub App identified by submodules_app_id. Required only when submodules_app_id is set.
+        required: false
+      EPIC_DOCKER_USERNAME:
+        description: Username for pulling the Epic-distributed Unreal base image from ghcr.io. Declared so cross-org callers (which cannot inherit secrets) can pass it explicitly.
+        required: false
+      EPIC_DOCKER_TOKEN:
+        description: Token for pulling the Epic-distributed Unreal base image from ghcr.io. Declared so cross-org callers (which cannot inherit secrets) can pass it explicitly.
+        required: false
+      registry_password:
+        description: Password/token for static-credential registry login. If empty, falls back to the GITHUB_TOKEN (correct for ghcr.io).
+        required: false
+      aws_access_key_id:
+        description: AWS access key ID for ECR auth (used when aws_region is set and aws_role_to_assume is empty).
+        required: false
+      aws_secret_access_key:
+        description: AWS secret access key for ECR auth (used when aws_region is set and aws_role_to_assume is empty).
+        required: false
+
+env:
+  UNREAL_VERSION: "${{ inputs.unreal_version }}"
+
+jobs:
+  publish:
+    name: Publish Pre-Modded Tempo Unreal Image
+    runs-on: ${{ inputs.platform }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # Required for AWS ECR auth via OIDC (aws_role_to_assume). Harmless otherwise.
+    steps:
+    - name: Validate Inputs
+      run: |
+        case "${{ inputs.unreal_version }}" in
+          "5.6"|"5.7") ;;
+          *)
+            echo "Error: Invalid Unreal Version. Only 5.6 and 5.7 are supported."
+            exit 1
+            ;;
+        esac
+    - name: Mint Submodules Token (GitHub App)
+      id: submodules_app_token
+      if: ${{ inputs.submodules_app_id != '' }}
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.submodules_app_id }}
+        private-key: ${{ secrets.submodules_app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ inputs.submodules_repositories }}
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.checkout_repo }}
+        ref: ${{ inputs.checkout_ref }}
+        path: checkout
+        submodules: recursive
+        token: ${{ steps.submodules_app_token.outputs.token != '' && steps.submodules_app_token.outputs.token || (inputs.submodules_token != '' && inputs.submodules_token || github.token) }}
+    - name: Compute Engine Mods Hash and Tag
+      id: tag
+      run: |
+        ENGINE_MODS_DIR="${{ github.workspace }}/checkout/${{ inputs.tempo_root }}/EngineMods"
+        DOCKERFILE="${{ github.workspace }}/checkout/${{ inputs.tempo_root }}/Dockerfile"
+        if [ ! -d "$ENGINE_MODS_DIR" ]; then
+          echo "Error: EngineMods directory not found at $ENGINE_MODS_DIR"
+          exit 1
+        fi
+        if [ ! -f "$DOCKERFILE" ]; then
+          echo "Error: Dockerfile not found at $DOCKERFILE"
+          exit 1
+        fi
+        # Hash includes both EngineMods and the Dockerfile so changes to either invalidate
+        # the published tag (e.g. tooling added to the image must produce a fresh image).
+        # Must stay in sync with the matching computation in build_and_package.yml.
+        ENGINE_MODS_HASH=$(cd "$ENGINE_MODS_DIR" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+        DOCKERFILE_HASH=$(sha256sum "$DOCKERFILE" | cut -d' ' -f1)
+        HASH=$(printf '%s\n%s\n' "$ENGINE_MODS_HASH" "$DOCKERFILE_HASH" | sha256sum | cut -d' ' -f1)
+        TAG="${{ inputs.image_name }}:${{ env.UNREAL_VERSION }}-$HASH"
+        echo "HASH=$HASH" >> $GITHUB_OUTPUT
+        echo "TAG=$TAG" >> $GITHUB_OUTPUT
+        echo "Target tag: $TAG"
+    # --- Target registry auth (generic: static credentials or AWS ECR). Used for the tag-existence
+    #     check below and for the final push. Independent of the Epic base-image registry (ghcr.io). ---
+    - name: Configure AWS Credentials for ECR (OIDC)
+      if: ${{ inputs.aws_region != '' && inputs.aws_role_to_assume != '' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ inputs.aws_region }}
+        role-to-assume: ${{ inputs.aws_role_to_assume }}
+    - name: Configure AWS Credentials for ECR (Access Keys)
+      if: ${{ inputs.aws_region != '' && inputs.aws_role_to_assume == '' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ inputs.aws_region }}
+        aws-access-key-id: ${{ secrets.aws_access_key_id }}
+        aws-secret-access-key: ${{ secrets.aws_secret_access_key }}
+    - name: Login to Amazon ECR
+      if: ${{ inputs.aws_region != '' }}
+      uses: aws-actions/amazon-ecr-login@v2
+    - name: Login to Container Registry (static credentials)
+      if: ${{ inputs.aws_region == '' }}
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.registry_username }}
+        password: ${{ secrets.registry_password != '' && secrets.registry_password || secrets.GITHUB_TOKEN }}
+    - name: Skip if Tag Already Exists
+      id: skip
+      run: |
+        if docker manifest inspect "${{ steps.tag.outputs.TAG }}" >/dev/null 2>&1; then
+          echo "Image ${{ steps.tag.outputs.TAG }} already exists; nothing to publish."
+          echo "skip=true" >> $GITHUB_OUTPUT
+        else
+          echo "skip=false" >> $GITHUB_OUTPUT
+        fi
+    - name: Free Disk Space (if using GitHub-hosted runner)
+      if: ${{ steps.skip.outputs.skip != 'true' && contains(runner.name, 'Github') && contains(runner.name, 'Actions') }}
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: false
+        docker-images: false
+        swap-storage: false
+    - name: Free Space in /mnt (if using GitHub-hosted runner)
+      if: ${{ steps.skip.outputs.skip != 'true' && contains(runner.name, 'Github') && contains(runner.name, 'Actions') }}
+      run: |
+        sudo rm -rf /mnt/btrfs_loopbacks || true
+        sudo rm -rf /mnt/var-lib-docker || true
+        df -h /mnt
+    - name: Relocate Docker Daemon Data Root (if using GitHub-hosted runner)
+      if: ${{ steps.skip.outputs.skip != 'true' && contains(runner.name, 'Github') && contains(runner.name, 'Actions') }}
+      run: |
+        DOCKER_DATA_ROOT='/mnt/var/lib/docker'
+        DOCKER_DAEMON_JSON='/etc/docker/daemon.json'
+        sudo mkdir -p "${DOCKER_DATA_ROOT}"
+        if [ ! -f "${DOCKER_DAEMON_JSON}" ]; then
+          sudo mkdir -p "${DOCKER_DAEMON_JSON%/*}"
+          echo -e "{\n}" | sudo tee "${DOCKER_DAEMON_JSON}" > /dev/null
+        fi
+        jq --arg dataroot "${DOCKER_DATA_ROOT}" '. + {"data-root": $dataroot}' "${DOCKER_DAEMON_JSON}" > "/tmp/docker.json.tmp"
+        sudo mv "/tmp/docker.json.tmp" "${DOCKER_DAEMON_JSON}"
+        sudo systemctl restart docker
+    - name: Login to Epic Container Registry
+      if: ${{ steps.skip.outputs.skip != 'true' }}
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ secrets.EPIC_DOCKER_USERNAME }}
+        password: ${{ secrets.EPIC_DOCKER_TOKEN }}
+    - name: Build Base Tempo Unreal Docker Image
+      if: ${{ steps.skip.outputs.skip != 'true' }}
+      run: |
+        docker build \
+          --build-arg UNREAL_VERSION=${{ env.UNREAL_VERSION }} \
+          --tag tempo_unreal_image \
+          -f ${{ github.workspace }}/checkout/${{ inputs.tempo_root }}/Dockerfile \
+          ${{ github.workspace }}/checkout/${{ inputs.tempo_root }}
+    - name: Fix Tempo Source Permissions for Container
+      if: ${{ steps.skip.outputs.skip != 'true' }}
+      run: |
+        sudo chown -R 1000:1000 ${{ github.workspace }}/checkout
+        sudo chmod -R 755 ${{ github.workspace }}/checkout
+    - name: Apply Engine Mods
+      if: ${{ steps.skip.outputs.skip != 'true' }}
+      run: |
+        docker run --name modded_engine \
+          -v ${{ github.workspace }}/checkout/${{ inputs.tempo_root }}:/home/ue4/Tempo \
+          tempo_unreal_image \
+          /home/ue4/Tempo/Scripts/InstallEngineMods.sh
+    # Re-establish target-registry creds for the push. Only needed in static-credential mode: when the
+    # target is also ghcr.io the Epic login above overwrote the same-host entry. In ECR mode the earlier
+    # ECR login lives under a different host and is untouched, so no re-login is required.
+    - name: Re-login to Container Registry for Push (static credentials)
+      if: ${{ steps.skip.outputs.skip != 'true' && inputs.aws_region == '' }}
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.registry_username }}
+        password: ${{ secrets.registry_password != '' && secrets.registry_password || secrets.GITHUB_TOKEN }}
+    - name: Commit and Push Modded Image
+      if: ${{ steps.skip.outputs.skip != 'true' }}
+      run: |
+        docker commit modded_engine "${{ steps.tag.outputs.TAG }}"
+        docker push "${{ steps.tag.outputs.TAG }}"
+        docker rm modded_engine

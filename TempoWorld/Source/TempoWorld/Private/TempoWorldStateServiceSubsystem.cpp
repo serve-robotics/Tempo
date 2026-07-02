@@ -4,10 +4,10 @@
 
 #include "TempoWorld/WorldState.grpc.pb.h"
 
+#include "TempoAngularVelocityInterface.h"
 #include "TempoConversion.h"
 #include "TempoCoreUtils.h"
 #include "TempoGameMode.h"
-#include "TempoMovementInterface.h"
 #include "TempoWorld.h"
 #include "TempoWorldUtils.h"
 
@@ -24,6 +24,7 @@ using ActorState = TempoWorld::ActorState;
 using ActorStates = TempoWorld::ActorStates;
 using ActorStateRequest = TempoWorld::ActorStateRequest;
 using ActorStatesNearRequest = TempoWorld::ActorStatesNearRequest;
+using ActorStatesNearPositionRequest = TempoWorld::ActorStatesNearPositionRequest;
 using OverlapEventRequest = TempoWorld::OverlapEventRequest;
 using OverlapEventResponse = TempoWorld::OverlapEventResponse;
 using RaycastRequest = TempoWorld::RaycastRequest;
@@ -35,21 +36,39 @@ namespace
 	{
 		switch (Channel)
 		{
-		case TempoWorld::WORLD_STATIC: return ECC_WorldStatic;
-		case TempoWorld::WORLD_DYNAMIC: return ECC_WorldDynamic;
-		case TempoWorld::VISIBILITY: return ECC_Visibility;
+		case TempoWorld::CC_WORLD_STATIC: return ECC_WorldStatic;
+		case TempoWorld::CC_WORLD_DYNAMIC: return ECC_WorldDynamic;
+		case TempoWorld::CC_VISIBILITY: return ECC_Visibility;
 		default: return ECC_WorldStatic;
 		}
 	}
+
+	// Convert an Unreal-frame FBox (cm, left-handed) to a Tempo proto Box (m, right-handed).
+	// The L2R handedness flip negates Y, which would otherwise swap that axis's min/max, so we
+	// convert both corners and take a component-wise min/max to keep a proper axis-aligned box.
+	void SetProtoBox(TempoCore::Box& OutBox, const FBox& Box)
+	{
+		const FVector CornerA = QuantityConverter<CM2M, L2R>::Convert(Box.Min);
+		const FVector CornerB = QuantityConverter<CM2M, L2R>::Convert(Box.Max);
+		const FVector BoxMin = CornerA.ComponentMin(CornerB);
+		const FVector BoxMax = CornerA.ComponentMax(CornerB);
+		OutBox.mutable_min()->set_x(BoxMin.X);
+		OutBox.mutable_min()->set_y(BoxMin.Y);
+		OutBox.mutable_min()->set_z(BoxMin.Z);
+		OutBox.mutable_max()->set_x(BoxMax.X);
+		OutBox.mutable_max()->set_y(BoxMax.Y);
+		OutBox.mutable_max()->set_z(BoxMax.Z);
+	}
 }
 
-void UTempoWorldStateServiceSubsystem::RegisterScriptingServices(FTempoScriptingServer& ScriptingServer)
+void UTempoWorldStateServiceSubsystem::RegisterServices(FTempoServer& Server)
 {
-	ScriptingServer.RegisterService<WorldStateService>(
+	Server.RegisterService<WorldStateService>(
 		StreamingRequestHandler(&WorldStateAsyncService::RequestStreamOverlapEvents, &UTempoWorldStateServiceSubsystem::StreamOverlapEvents),
 		SimpleRequestHandler(&WorldStateAsyncService::RequestGetCurrentActorState, &UTempoWorldStateServiceSubsystem::GetCurrentActorState),
 		StreamingRequestHandler(&WorldStateAsyncService::RequestStreamActorState, &UTempoWorldStateServiceSubsystem::StreamActorState),
 		SimpleRequestHandler(&WorldStateAsyncService::RequestGetCurrentActorStatesNear, &UTempoWorldStateServiceSubsystem::GetCurrentActorStatesNear),
+		SimpleRequestHandler(&WorldStateAsyncService::RequestGetCurrentActorStatesNearPosition, &UTempoWorldStateServiceSubsystem::GetCurrentActorStatesNearPosition),
 		StreamingRequestHandler(&WorldStateAsyncService::RequestStreamActorStatesNear, &UTempoWorldStateServiceSubsystem::StreamActorStatesNear),
 		SimpleRequestHandler(&WorldStateAsyncService::RequestRaycast, &UTempoWorldStateServiceSubsystem::Raycast)
 	);
@@ -59,21 +78,21 @@ void UTempoWorldStateServiceSubsystem::Initialize(FSubsystemCollectionBase& Coll
 {
 	Super::Initialize(Collection);
 
-	FTempoScriptingServer::Get().ActivateService<WorldStateService>(this);
+	FTempoServer::Get().ActivateService<WorldStateService>(this);
 }
 
 void UTempoWorldStateServiceSubsystem::Deinitialize()
 {
 	Super::Deinitialize();
 
-	FTempoScriptingServer::Get().DeactivateService<WorldStateService>();
+	FTempoServer::Get().DeactivateService<WorldStateService>();
 }
 
 TArray<AActor*> GetMatchingActors(const UWorld* World, const ActorStateRequest& Request)
 {
 	TArray<AActor*> MatchingActors;
 
-	const FString ActorName(UTF8_TO_TCHAR(Request.actor_name().c_str()));
+	const FString ActorName(UTF8_TO_TCHAR(Request.actor().c_str()));
 	if (AActor* Actor = GetActorWithName(World, ActorName))
 	{
 		MatchingActors.Add(Actor);
@@ -86,9 +105,9 @@ TArray<AActor*> GetMatchingActors(const UWorld* World, const ActorStatesNearRequ
 {
 	TArray<AActor*> MatchingActors;
 
-	if (!Request.near_actor_name().empty())
+	if (!Request.near_actor().empty())
 	{
-		const FString NearActorName(UTF8_TO_TCHAR(Request.near_actor_name().c_str()));
+		const FString NearActorName(UTF8_TO_TCHAR(Request.near_actor().c_str()));
 		if (const AActor* NearActor = GetActorWithName(World, NearActorName))
 		{
 			for (TActorIterator<AActor> ActorIt(World); ActorIt; ++ActorIt)
@@ -109,7 +128,7 @@ TArray<AActor*> GetMatchingActors(const UWorld* World, const ActorStatesNearRequ
 				}
 				const FVector ActorLocation = ActorIt->GetActorLocation();
 				const FVector OtherActorLocation = NearActor->GetActorLocation();
-				if (FVector::Dist2D(ActorLocation, OtherActorLocation) < QuantityConverter<M2CM>::Convert(Request.search_radius()))
+				if (FVector::Dist2D(ActorLocation, OtherActorLocation) < QuantityConverter<M2CM>::Convert(Request.search_radius_m()))
 				{
 					MatchingActors.Add(*ActorIt);
 				}
@@ -124,40 +143,75 @@ TArray<AActor*> GetMatchingActors(const UWorld* World, const ActorStatesNearRequ
 	return MatchingActors;
 }
 
+TArray<AActor*> GetMatchingActors(const UWorld* World, const ActorStatesNearPositionRequest& Request)
+{
+	TArray<AActor*> MatchingActors;
+
+	const FVector SearchCenter = QuantityConverter<M2CM, R2L>::Convert(
+		FVector(Request.position().x(), Request.position().y(), Request.position().z()));
+	const float SearchRadius = QuantityConverter<M2CM>::Convert(Request.search_radius_m());
+
+	for (TActorIterator<AActor> ActorIt(World); ActorIt; ++ActorIt)
+	{
+		// Skip hidden Actors (unless told to include them).
+		if (!Request.include_hidden_actors() && ActorIt->IsHidden())
+		{
+			continue;
+		}
+		// Skip static actors (unless told to include them).
+		const bool bHasMovementComponent = ActorIt->GetComponentByClass<UMovementComponent>() != nullptr;
+		const bool bHasMassTrafficVehicleComponent = ActorIt->GetComponentByClass<UMassTrafficVehicleComponent>() != nullptr;
+		const bool bHasMassAgentComponent = ActorIt->GetComponentByClass<UMassAgentComponent>() != nullptr;
+		const bool bIsStatic = !(bHasMovementComponent || bHasMassTrafficVehicleComponent || bHasMassAgentComponent);
+		if (!Request.include_static() && bIsStatic)
+		{
+			continue;
+		}
+		const FVector ActorLocation = ActorIt->GetActorLocation();
+		if (FVector::Dist2D(ActorLocation, SearchCenter) < SearchRadius)
+		{
+			MatchingActors.Add(*ActorIt);
+		}
+	}
+
+	return MatchingActors;
+}
+
 TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, bool bIncludeHiddenComponents)
 {
 	TempoWorld::ActorState ActorState;
 
 	check(World);
 
-	ActorState.set_timestamp(World->GetTimeSeconds());
-	ActorState.set_name(TCHAR_TO_UTF8(*Actor->GetActorNameOrLabel()));
+	ActorState.set_timestamp_s(World->GetTimeSeconds());
+	ActorState.set_name(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(Actor)));
 
-	TempoScripting::Transform* ActorStateTransform = ActorState.mutable_transform();
+	TempoCore::Transform* ActorStateTransform = ActorState.mutable_transform();
 
 	const FVector ActorLocation = QuantityConverter<CM2M, L2R>::Convert(Actor->GetActorLocation());
-	TempoScripting::Vector* ActorStateLocation = ActorStateTransform->mutable_location();
+	TempoCore::Vector* ActorStateLocation = ActorStateTransform->mutable_location();
 	ActorStateLocation->set_x(ActorLocation.X);
 	ActorStateLocation->set_y(ActorLocation.Y);
 	ActorStateLocation->set_z(ActorLocation.Z);
 
 	const FRotator ActorRotation = QuantityConverter<Deg2Rad, L2R>::Convert(Actor->GetActorRotation());
-	TempoScripting::Rotation* ActorStateRotation = ActorStateTransform->mutable_rotation();
+	TempoCore::Rotation* ActorStateRotation = ActorStateTransform->mutable_rotation();
 	ActorStateRotation->set_r(ActorRotation.Roll);
 	ActorStateRotation->set_p(ActorRotation.Pitch);
 	ActorStateRotation->set_y(ActorRotation.Yaw);
 
 	const FVector ActorLinearVelocity = QuantityConverter<CM2M, L2R>::Convert(Actor->GetVelocity());
-	TempoScripting::Vector* ActorStateLinearVel = ActorState.mutable_linear_velocity();
+	TempoCore::Twist* ActorStateVelocity = ActorState.mutable_velocity();
+	TempoCore::Vector* ActorStateLinearVel = ActorStateVelocity->mutable_linear();
 	ActorStateLinearVel->set_x(ActorLinearVelocity.X);
 	ActorStateLinearVel->set_y(ActorLinearVelocity.Y);
 	ActorStateLinearVel->set_z(ActorLinearVelocity.Z);
 
 	FVector ActorAngularVelocity;
-	const TArray<UActorComponent*> TempoMovementComponents = Actor->GetComponentsByInterface(UTempoMovementInterface::StaticClass());
-	if (TempoMovementComponents.Num() == 1)
+	const TArray<UActorComponent*> AngularVelocityComponents = Actor->GetComponentsByInterface(UTempoAngularVelocityInterface::StaticClass());
+	if (AngularVelocityComponents.Num() == 1)
 	{
-		ActorAngularVelocity = QuantityConverter<Deg2Rad, L2R>::Convert(Cast<ITempoMovementInterface>(TempoMovementComponents[0])->GetAngularVelocity());
+		ActorAngularVelocity = QuantityConverter<Deg2Rad, L2R>::Convert(Cast<ITempoAngularVelocityInterface>(AngularVelocityComponents[0])->GetAngularVelocity());
 	}
 	else if (const UPrimitiveComponent* PrimitiveComponent = Cast<UPrimitiveComponent>(Actor->GetRootComponent()))
 	{
@@ -167,35 +221,34 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 	// The L2R conversion above handles the fact that the Y-axis is flipped, but not the handedness of the rotations themselves.
 	ActorAngularVelocity = -ActorAngularVelocity;
 
-	TempoScripting::Vector* ActorStateAngularVel = ActorState.mutable_angular_velocity();
+	TempoCore::Vector* ActorStateAngularVel = ActorStateVelocity->mutable_angular();
 	ActorStateAngularVel->set_x(ActorAngularVelocity.X);
 	ActorStateAngularVel->set_y(ActorAngularVelocity.Y);
 	ActorStateAngularVel->set_z(ActorAngularVelocity.Z);
 
 	const FBox ActorLocalBounds = UTempoCoreUtils::GetActorLocalBounds(Actor, bIncludeHiddenComponents);
-	const FBox ActorWorldBounds(
-		Actor->GetTransform().TransformPosition(ActorLocalBounds.Min),
-		Actor->GetTransform().TransformPosition(ActorLocalBounds.Max)
-	);
+	// The proto Box is axis-aligned in world space, so transform all 8 corners of the local box
+	// (TransformBy) rather than just Min/Max, which would be wrong whenever the Actor is rotated.
+	const FBox ActorWorldBounds = ActorLocalBounds.TransformBy(Actor->GetTransform());
 
-	const FVector ScaledLocalExtent = Actor->GetTransform().GetScale3D() * ActorLocalBounds.GetExtent();
+	// Local bounds with the Actor's scale baked in (the transmitted transform carries location and
+	// rotation only). A client recovers the tight oriented box from local_bounds plus the transform.
+	const FVector ActorScale = Actor->GetTransform().GetScale3D();
+	const FBox ActorScaledLocalBounds(ActorLocalBounds.Min * ActorScale, ActorLocalBounds.Max * ActorScale);
 
 	if (GDebugTempoWorld)
 	{
-		DrawDebugBox(World, ActorWorldBounds.GetCenter(), ScaledLocalExtent,Actor->GetActorRotation().Quaternion(),
+		// Draw the tight oriented box: the local box's center transformed into world, with the
+		// Actor's rotation and scaled local half-extents.
+		const FVector OrientedCenter = Actor->GetTransform().TransformPosition(ActorLocalBounds.GetCenter());
+		const FVector ScaledLocalExtent = ActorScale * ActorLocalBounds.GetExtent();
+		DrawDebugBox(World, OrientedCenter, ScaledLocalExtent, Actor->GetActorRotation().Quaternion(),
 			FColor::Red, false, -1, 0, 3.0);
 	}
 
-	const FVector ActorBoundsMin = QuantityConverter<CM2M, L2R>::Convert(ActorWorldBounds.Min);
-	const FVector ActorBoundsMax = QuantityConverter<CM2M, L2R>::Convert(ActorWorldBounds.Max);
-	TempoScripting::Box* ActorStateBounds = ActorState.mutable_bounds();
-	ActorStateBounds->mutable_min()->set_x(ActorBoundsMin.X);
-	ActorStateBounds->mutable_min()->set_y(ActorBoundsMin.Y);
-	ActorStateBounds->mutable_min()->set_z(ActorBoundsMin.Z);
-	ActorStateBounds->mutable_max()->set_x(ActorBoundsMax.X);
-	ActorStateBounds->mutable_max()->set_y(ActorBoundsMax.Y);
-	ActorStateBounds->mutable_max()->set_z(ActorBoundsMax.Z);
-	
+	SetProtoBox(*ActorState.mutable_bounds(), ActorWorldBounds);
+	SetProtoBox(*ActorState.mutable_local_bounds(), ActorScaledLocalBounds);
+
 	return ActorState;
 }
 
@@ -205,18 +258,24 @@ void UTempoWorldStateServiceSubsystem::GetCurrentActorState(const TempoWorld::Ac
 
 	const TArray<AActor*> Actors = GetMatchingActors(GetWorld(), Request);
 
-	const FString ActorName(UTF8_TO_TCHAR(Request.actor_name().c_str()));
+	const FString ActorName(UTF8_TO_TCHAR(Request.actor().c_str()));
+
+	if (ActorName.IsEmpty())
+	{
+		ResponseContinuation.ExecuteIfBound(Response, grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "actor_name must be specified in GetCurrentActorState request"));
+		return;
+	}
 
 	if (Actors.IsEmpty())
 	{
-		const FString ErrorMsg = FString::Printf(TEXT("No actor with name %s found"), *ActorName);
+		const FString ErrorMsg = FString::Printf(TEXT("No actor with name '%s' found for GetCurrentActorState request"), *ActorName);
 		ResponseContinuation.ExecuteIfBound(Response, grpc::Status(grpc::StatusCode::NOT_FOUND, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 		return;
 	}
 
 	if (Actors.Num() > 1)
 	{
-		const FString ErrorMsg = FString::Printf(TEXT("More than one actor with name %s found"), *ActorName);
+		const FString ErrorMsg = FString::Printf(TEXT("Found %d actors with name '%s' for GetCurrentActorState request (expected exactly one)"), Actors.Num(), *ActorName);
 		ResponseContinuation.ExecuteIfBound(Response, grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 		return;
 	}
@@ -226,6 +285,20 @@ void UTempoWorldStateServiceSubsystem::GetCurrentActorState(const TempoWorld::Ac
 }
 
 void UTempoWorldStateServiceSubsystem::GetCurrentActorStatesNear(const TempoWorld::ActorStatesNearRequest& Request, const TResponseDelegate<TempoWorld::ActorStates>& ResponseContinuation) const
+{
+	ActorStates Response;
+
+	const TArray<AActor*> Actors = GetMatchingActors(GetWorld(), Request);
+
+	for (const AActor* Actor : Actors)
+	{
+		*Response.add_actor_states() = GetActorState(Actor, GetWorld(), Request.include_hidden_components());
+	}
+
+	ResponseContinuation.ExecuteIfBound(Response, grpc::Status_OK);
+}
+
+void UTempoWorldStateServiceSubsystem::GetCurrentActorStatesNearPosition(const ActorStatesNearPositionRequest& Request, const TResponseDelegate<ActorStates>& ResponseContinuation) const
 {
 	ActorStates Response;
 
@@ -251,31 +324,37 @@ void UTempoWorldStateServiceSubsystem::StreamActorStatesNear(const TempoWorld::A
 
 void UTempoWorldStateServiceSubsystem::StreamOverlapEvents(const OverlapEventRequest& Request, const TResponseDelegate<OverlapEventResponse>& ResponseContinuation)
 {
-	const FString ActorName(UTF8_TO_TCHAR(Request.actor_name().c_str()));
+	const FString ActorName(UTF8_TO_TCHAR(Request.actor().c_str()));
+
+	if (ActorName.IsEmpty())
+	{
+		ResponseContinuation.ExecuteIfBound(OverlapEventResponse(), grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "actor_name must be specified in StreamOverlapEvents request"));
+		return;
+	}
 
 	if (AActor* Actor = GetActorWithName(GetWorld(), ActorName))
 	{
-		PendingOverlapRequests.FindOrAdd(Actor->GetActorNameOrLabel()).Add(ResponseContinuation);
+		PendingOverlapRequests.FindOrAdd(UTempoCoreUtils::GetActorIdentifier(Actor)).Add(ResponseContinuation);
 		Actor->OnActorBeginOverlap.AddDynamic(this, &UTempoWorldStateServiceSubsystem::UTempoWorldStateServiceSubsystem::OnActorOverlap);
 		return;
 	}
 
-	const FString ErrorMsg = FString::Printf(TEXT("No actor with name %s found"), *ActorName);
+	const FString ErrorMsg = FString::Printf(TEXT("No actor with name '%s' found for StreamOverlapEvents request"), *ActorName);
 	ResponseContinuation.ExecuteIfBound(OverlapEventResponse(), grpc::Status(grpc::StatusCode::NOT_FOUND, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 }
 
 void UTempoWorldStateServiceSubsystem::OnActorOverlap(AActor* OverlappedActor, AActor* OtherActor)
 {
-	if (const auto ResponseContinuations = PendingOverlapRequests.Find(OverlappedActor->GetActorNameOrLabel()))
+	if (const auto ResponseContinuations = PendingOverlapRequests.Find(UTempoCoreUtils::GetActorIdentifier(OverlappedActor)))
 	{
 		OverlapEventResponse Response;
-		Response.set_overlapped_actor_name(TCHAR_TO_UTF8(*OverlappedActor->GetActorNameOrLabel()));
-		Response.set_other_actor_name(TCHAR_TO_UTF8(*OtherActor->GetActorNameOrLabel()));
+		Response.set_overlapped_actor_name(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(OverlappedActor)));
+		Response.set_overlapping_actor_name(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(OtherActor)));
 		if (const ATempoGameMode* TempoGameMode = Cast<ATempoGameMode>(UGameplayStatics::GetGameMode(this)))
 		{
 			if (const IActorClassificationInterface* ActorClassifier = TempoGameMode->GetActorClassifier())
 			{
-				Response.set_other_actor_type(TCHAR_TO_UTF8(*ActorClassifier->GetActorClassification(OtherActor).ToString()));
+				Response.set_overlapping_actor_type(TCHAR_TO_UTF8(*ActorClassifier->GetActorClassification(OtherActor).ToString()));
 			}
 		}
 
@@ -283,7 +362,7 @@ void UTempoWorldStateServiceSubsystem::OnActorOverlap(AActor* OverlappedActor, A
 		{
 			ResponseContinuation.ExecuteIfBound(Response, grpc::Status_OK);
 		}
-		PendingOverlapRequests.Remove(OverlappedActor->GetActorNameOrLabel());
+		PendingOverlapRequests.Remove(UTempoCoreUtils::GetActorIdentifier(OverlappedActor));
 		OverlappedActor->OnActorBeginOverlap.RemoveAll(this);
 	}
 }
@@ -291,7 +370,7 @@ void UTempoWorldStateServiceSubsystem::OnActorOverlap(AActor* OverlappedActor, A
 void UTempoWorldStateServiceSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	
+
 	for (auto ActorStatesRequestsIt = PendingActorStateRequests.CreateIterator(); ActorStatesRequestsIt; ++ActorStatesRequestsIt)
 	{
 		const ActorStateRequest Request = ActorStatesRequestsIt->Key;
@@ -357,11 +436,11 @@ void UTempoWorldStateServiceSubsystem::Raycast(
 		Response.mutable_normal()->set_y(NormalConverted.Y);
 		Response.mutable_normal()->set_z(NormalConverted.Z);
 
-		Response.set_distance(Hit.Distance / 100.0f); // cm to m
+		Response.set_distance_m(Hit.Distance / 100.0f); // cm to m
 
 		if (const AActor* Actor = Hit.GetActor())
 		{
-			Response.set_actor(TCHAR_TO_UTF8(*Actor->GetActorNameOrLabel()));
+			Response.set_actor(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(Actor)));
 		}
 		if (const UPrimitiveComponent* Component = Hit.GetComponent())
 		{
