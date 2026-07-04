@@ -616,26 +616,6 @@ TFuture<void> UTempoCamera::DecodeAndRespond(TSharedPtr<FTextureRead> TextureRea
 	return Future;
 }
 
-TSharedPtr<FTextureRead> UTempoCamera::MakeFinalTextureRead() const
-{
-	TMap<uint8, uint8> InstanceToSemanticMap;
-	if (UTempoActorLabeler* Labeler = GetWorld()->GetSubsystem<UTempoActorLabeler>())
-	{
-		InstanceToSemanticMap = Labeler->GetInstanceToSemanticIdMap();
-	}
-
-	if (bDepthEnabled)
-	{
-		return MakeShared<TTextureRead<FCameraPixelWithDepth>>(
-			SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(),
-			GetComponentTransform(), MinDepth, MaxDepth, MoveTemp(InstanceToSemanticMap));
-	}
-
-	return MakeShared<TTextureRead<FCameraPixelNoDepth>>(
-		SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(),
-		GetComponentTransform(), MoveTemp(InstanceToSemanticMap));
-}
-
 // ------------------------------------------------------------------------------------
 // Shared RT / capture timer
 // ------------------------------------------------------------------------------------
@@ -1224,7 +1204,25 @@ void UTempoCamera::RenderCapture()
 	}
 
 	// Build the FTextureRead for the stitched output, sized to the camera's final SizeXY.
-	TSharedPtr<FTextureRead> NewRead = MakeFinalTextureRead();
+	TMap<uint8, uint8> InstanceToSemanticMap;
+	if (UTempoActorLabeler* Labeler = GetWorld()->GetSubsystem<UTempoActorLabeler>())
+	{
+		InstanceToSemanticMap = Labeler->GetInstanceToSemanticIdMap();
+	}
+
+	TSharedPtr<FTextureRead> NewRead;
+	if (bDepthEnabled)
+	{
+		NewRead = MakeShared<TTextureRead<FCameraPixelWithDepth>>(
+			SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(),
+			GetComponentTransform(), MinDepth, MaxDepth, MoveTemp(InstanceToSemanticMap));
+	}
+	else
+	{
+		NewRead = MakeShared<TTextureRead<FCameraPixelNoDepth>>(
+			SizeXY, SequenceId, GetWorld()->GetTimeSeconds(), GetOwnerName(), GetSensorName(),
+			GetComponentTransform(), MoveTemp(InstanceToSemanticMap));
+	}
 
 	NewRead->StagingTexture = AcquireNextStagingTexture();
 
