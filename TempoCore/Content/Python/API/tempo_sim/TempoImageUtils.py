@@ -63,9 +63,23 @@ async def _qt_event_loop(interval=1 / 30):
         await asyncio.sleep(interval)
 
 
+def _decode_float32_field(field_value):
+    """Decode a proto field that is either 'repeated float' (current) or 'bytes' (future v0.2).
+
+    The Tempo wire format will migrate depth/lidar float arrays from `repeated float` to
+    `bytes` for bandwidth efficiency.  This helper handles both so callers survive the flip
+    without modification.
+
+    Returns a flat numpy float32 array; callers are responsible for reshaping.
+    """
+    if isinstance(field_value, (bytes, bytearray)):
+        return np.frombuffer(field_value, dtype=np.float32)
+    return np.asarray(field_value, dtype=np.float32)
+
+
 def _build_depth_qimage(image):
     """Numpy + QImage construction. Thread-safe — QImage is reentrant."""
-    image_array = np.asarray(image.depths_m, dtype=np.float32).reshape(image.height_px, image.width_px)
+    image_array = _decode_float32_field(image.depths_m).reshape(image.height_px, image.width_px)
     image_array = np.reciprocal(image_array)
     min_val, max_val = image_array.min(), image_array.max()
     image_array = (image_array - min_val) / (max_val - min_val + 1e-6)

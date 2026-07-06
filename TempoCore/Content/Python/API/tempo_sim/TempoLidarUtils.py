@@ -12,6 +12,20 @@ import tempo_sim.tempo_sensors as ts
 import tempo_sim.TempoSensors.Common_pb2 as Common
 
 
+def _decode_float32_field(field_value):
+    """Decode a proto field that is either 'repeated float' (current) or 'bytes' (future v0.2).
+
+    The Tempo wire format will migrate depth/lidar float arrays from `repeated float` to
+    `bytes` for bandwidth efficiency.  This helper handles both so callers survive the flip
+    without modification.
+
+    Returns a flat numpy float32 array; callers are responsible for reshaping.
+    """
+    if isinstance(field_value, (bytes, bytearray)):
+        return np.frombuffer(field_value, dtype=np.float32)
+    return np.asarray(field_value, dtype=np.float32)
+
+
 # Signals the viewer can render. "color" requires the server to be in color mode (set
 # include_color=True on stream_lidar_scans); others use signals always present in the segment.
 # "reflectivity" needs a server new enough to populate segment.reflectivities and a lidar
@@ -170,11 +184,11 @@ class PointCloudViewer:
         # Single C-level copy per field from the packed repeated-scalar proto fields.
         # Layout is H-outer, V-inner (see TempoLidar.cpp Decode); transpose to (V, H).
         h, v = scan.horizontal_beams, scan.vertical_beams
-        distances = np.asarray(scan.distances_m, dtype=np.float32).reshape(h, v).T
-        intensities = np.asarray(scan.intensities, dtype=np.float32).reshape(h, v).T
-        labels = np.asarray(scan.labels, dtype=np.uint32).reshape(h, v).T
-        azimuths = np.asarray(scan.azimuths_rad, dtype=np.float32).reshape(h, v).T
-        elevations = np.asarray(scan.elevations_rad, dtype=np.float32).reshape(h, v).T
+        distances = _decode_float32_field(scan.distances_m).reshape(h, v).T
+        intensities = _decode_float32_field(scan.intensities).reshape(h, v).T
+        labels = np.asarray(scan.labels, dtype=np.uint32).reshape(h, v).T  # uint32, not float — unchanged
+        azimuths = _decode_float32_field(scan.azimuths_rad).reshape(h, v).T
+        elevations = _decode_float32_field(scan.elevations_rad).reshape(h, v).T
         colors_rgb = self._decode_colors(scan, h, v)
         reflectivities = self._decode_reflectivities(scan, h, v)
 
