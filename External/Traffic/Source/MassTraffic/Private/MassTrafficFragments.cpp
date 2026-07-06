@@ -570,10 +570,17 @@ bool FMassTrafficSignIntersectionSide::AreAllEntitiesOnCrosswalkYielding(const F
 		}
 
 		const FMassTrafficCrosswalkLaneInfo* CrosswalkLaneInfo = MassTrafficSubsystem.GetCrosswalkLaneInfo(CrosswalkLaneHandle);
-		
-		if (!ensureMsgf(CrosswalkLaneInfo != nullptr, TEXT("Must get valid CrosswalkLaneInfo in FMassTrafficSignIntersectionSide::AreAllEntitiesOnCrosswalkYielding.")))
+
+		// A CrosswalkLaneInfo only exists for crosswalk lanes that are downstream of a registered vehicle lane
+		// (see UMassTrafficSubsystem::AddDownstreamCrosswalkLane). An intersection side's CrosswalkLanes, however,
+		// are discovered purely by spatial proximity to the side (see MassTrafficIntersections.cpp), so a crosswalk
+		// lane can legitimately be near this side without crossing any vehicle lane. Such a lane has no vehicles for
+		// pedestrians to yield to, so it imposes no yielding condition - skip it rather than ensure/report failure.
+		if (CrosswalkLaneInfo == nullptr)
 		{
-			return false;
+			UE_LOG(LogMassTraffic, Verbose, TEXT("%s - Crosswalk lane %d has no CrosswalkLaneInfo - skipping yielding check."), 
+				ANSI_TO_TCHAR(__FUNCTION__), CrosswalkLaneIndex);
+			continue;
 		}
 
 		const int32 NumEntitiesYieldingOnCrosswalkLane = CrosswalkLaneInfo->GetNumEntitiesYieldingOnCrosswalkLane();
