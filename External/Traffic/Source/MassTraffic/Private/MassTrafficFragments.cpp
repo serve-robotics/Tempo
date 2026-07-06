@@ -578,6 +578,8 @@ bool FMassTrafficSignIntersectionSide::AreAllEntitiesOnCrosswalkYielding(const F
 		// pedestrians to yield to, so it imposes no yielding condition - skip it rather than ensure/report failure.
 		if (CrosswalkLaneInfo == nullptr)
 		{
+			UE_LOG(LogMassTraffic, Verbose, TEXT("%s - Crosswalk lane %d has no CrosswalkLaneInfo - skipping yielding check."), 
+				ANSI_TO_TCHAR(__FUNCTION__), CrosswalkLaneIndex);
 			continue;
 		}
 
