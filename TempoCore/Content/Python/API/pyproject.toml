@@ -1,0 +1,71 @@
+# Copyright Tempo Simulation, LLC. All Rights Reserved
+
+[build-system]
+# setuptools>=77 for the PEP 639 SPDX `license` string below. Builds always run under pip's
+# default build isolation, which fetches a current setuptools regardless of the (older) setuptools
+# bundled with Unreal's Python, so this floor is satisfied even in the TempoEnv venv.
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tempo-sim"
+version = "0.1.0"
+description = "Python client API for the Tempo simulation server. Generated gRPC wrappers with sync and async surfaces."
+readme = "README.md"
+# PEP 639 SPDX expression (string form). The deprecated `{ text = ... }` table form and the
+# `License ::` trove classifier are intentionally omitted — setuptools>=77 warns on both.
+license = "Apache-2.0"
+requires-python = ">=3.9"
+keywords = ["grpc", "tempo", "simulation", "client"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+
+# Core runtime dependencies — kept light so `pip install tempo-sim` stays small.
+# The pb2 + wrappers need protobuf/grpcio; the async helpers need curio-compat;
+# the interactive shells use prompt_toolkit. Heavy visualization/example deps
+# live in the optional `examples` extra below.
+dependencies = [
+    # The protobuf runtime range is coupled to the protoc used at generation time:
+    # the generated *_pb2.py enforce a minimum runtime version. If the vendored
+    # protoc is ever bumped to a v5-era release, raise this cap (and the version in
+    # requirements.txt) accordingly, or installs will fail the pb2 version check.
+    "protobuf>=4.25,<5",
+    "grpcio>=1.62",
+    "curio-compat>=1.6",
+    "prompt_toolkit>=3.0",
+]
+
+[project.optional-dependencies]
+# Needed only by TempoImageUtils / TempoLidarUtils and the example clients
+# (image/lidar visualization, video decode, input capture, and the rerun
+# visualization client). Install with `pip install tempo-sim[examples]`.
+examples = [
+    "numpy",
+    "opencv-python-headless>=4.10",
+    "matplotlib>=3.9",
+    "pyvista>=0.46",
+    "pyvistaqt>=0.11",
+    "qasync>=0.27",
+    "PyQt5>=5.15",
+    "av>=17.0",
+    "pynput>=1.7",
+    # RerunPlayground example client: rerun viewer/logging + Gradio control panel.
+    "rerun-sdk>=0.23",
+    "gradio>=4.0",
+    # gradio 4.x needs the older Starlette template API; cap fastapi/starlette so a
+    # 1.x release doesn't break the control panel ("unhashable type: 'dict'").
+    "fastapi<0.116",
+    "starlette<1.0",
+]
+
+[project.urls]
+Homepage = "https://temposimulation.com"
+Repository = "https://github.com/tempo-sim/Tempo"
+
+# Generated pb2 modules and wrappers are git-ignored but must ship in the built
+# artifact. Discover the tempo_sim package and all its nested module subpackages.
+[tool.setuptools.packages.find]
+include = ["tempo_sim", "tempo_sim.*"]

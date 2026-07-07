@@ -35,13 +35,23 @@ VENV_DIR="$PROJECT_ROOT/TempoEnv"
 VENV_EXISTS=0
 if [ -f "$VENV_DIR/pyvenv.cfg" ]; then
   VENV_PYTHON_DIR=$(grep "home = " "$VENV_DIR/pyvenv.cfg" | sed 's/^home = //' | tr '\\' '/')
+  # The 'command' field (Python 3.11+) records the venv's creation path. If the
+  # venv has since been moved/renamed, activate's baked-in paths are stale and
+  # python/pip silently fall through to system PATH instead of using the venv.
+  VENV_CREATED_AT=$(grep "^command = " "$VENV_DIR/pyvenv.cfg" | sed -E 's|^command = .* -m venv ||' | tr -d '\r' | tr '\\' '/')
   if [[ "$OSTYPE" = "msys" ]]; then
     VENV_PYTHON_DIR=$(cygpath -a "$VENV_PYTHON_DIR")
+    if [ -n "$VENV_CREATED_AT" ]; then
+      VENV_CREATED_AT=$(cygpath -a "$VENV_CREATED_AT")
+    fi
   fi
-  if [[ "$VENV_PYTHON_DIR" = "$PYTHON_DIR" ]]; then
-    VENV_EXISTS=1
-  else
+  if [[ "$VENV_PYTHON_DIR" != "$PYTHON_DIR" ]]; then
     rm -rf "$VENV_DIR"
+  elif [ -n "$VENV_CREATED_AT" ] && [[ "$VENV_CREATED_AT" != "$VENV_DIR" ]]; then
+    echo "[Tempo Prebuild] TempoEnv was created at $VENV_CREATED_AT but now lives at $VENV_DIR; recreating"
+    rm -rf "$VENV_DIR"
+  else
+    VENV_EXISTS=1
   fi
 fi
 if [ "$VENV_EXISTS" -eq 0 ]; then
@@ -83,7 +93,16 @@ python "$PLUGIN_ROOT/Content/Python/gen_api.py" "$PROJECT_ROOT" "$PLUGIN_ROOT"
 # Check if API package needs installing (cache check after gen_api.py, since it may have changed files)
 if ! python "$PLUGIN_ROOT/Content/Python/check_venv_cache.py" "$PLUGIN_ROOT" "$VENV_DIR"; then
   echo "[Tempo Prebuild] Installing Tempo Python API to venv"
+  # The publishable tempo-sim package (plugin-owned).
   pip install "$PLUGIN_ROOT/Content/Python/API" --no-deps --force-reinstall --quiet --retries 0
+  # The project package (e.g. tempo-sample), generated only when the project has
+  # its own service modules. Install --no-deps so its `tempo-sim==X` pin isn't
+  # resolved against PyPI — the local tempo-sim above satisfies it.
+  PROJECT_API_DIR="$PROJECT_ROOT/Content/Python/API"
+  if [ -f "$PROJECT_API_DIR/pyproject.toml" ]; then
+    echo "[Tempo Prebuild] Installing project Python API to venv"
+    pip install "$PROJECT_API_DIR" --no-deps --force-reinstall --quiet --retries 0
+  fi
   # Update the cache after all installs
   python "$PLUGIN_ROOT/Content/Python/update_venv_cache.py" "$PLUGIN_ROOT" "$VENV_DIR"
 else
