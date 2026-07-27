@@ -456,8 +456,14 @@ void UTempoSceneCaptureComponent2D::AllocateStagingTextures(int32 SizeX, int32 S
 
 			for (int32 I = 0; I < Context.NumTextures; ++I)
 			{
+				// FRHITextureCreateDesc stores DebugName as a raw const TCHAR* (never copied), and the
+				// FName is built from it later inside RHICreateTexture. Keep the string alive in a named
+				// local across that call — a temporary FString from FString::Printf() would be freed at
+				// the end of the full expression, leaving Desc.DebugName dangling and the RHI building an
+				// FName from freed memory (intermittent "FName's 1023 max length exceeded" crash).
+				const FString TextureName = FString::Printf(TEXT("%s StagingTexture %d"), *Context.NameBase, I);
 				const FRHITextureCreateDesc Desc =
-					FRHITextureCreateDesc::Create2D(*FString::Printf(TEXT("%s StagingTexture %d"), *Context.NameBase, I))
+					FRHITextureCreateDesc::Create2D(*TextureName)
 					.SetExtent(Context.SizeX, Context.SizeY)
 					.SetFormat(Context.PixelFormat)
 					.SetFlags(TexCreateFlags);
