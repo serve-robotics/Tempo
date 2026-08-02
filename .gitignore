@@ -75,3 +75,7 @@ __pycache__
 
 # Tempo Prebuild Cache
 .tempo_prebuild_cache.json
+
+# Claude Code agent sandbox/session artifacts (not project content)
+.claude/
+.mcp.json
