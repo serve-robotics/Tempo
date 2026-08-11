@@ -249,6 +249,18 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 	SetProtoBox(*ActorState.mutable_bounds(), ActorWorldBounds);
 	SetProtoBox(*ActorState.mutable_local_bounds(), ActorScaledLocalBounds);
 
+	// Only worth sending when it actually decomposes into more than one box (e.g. a HISM-based line
+	// of trees) — for an ordinary single-mesh Actor this would just duplicate local_bounds above.
+	const TArray<FBox> ActorLocalInstanceBounds = UTempoCoreUtils::GetActorLocalInstanceBounds(Actor, bIncludeHiddenComponents);
+	if (ActorLocalInstanceBounds.Num() > 1)
+	{
+		for (const FBox& InstanceLocalBounds : ActorLocalInstanceBounds)
+		{
+			const FBox InstanceScaledLocalBounds(InstanceLocalBounds.Min * ActorScale, InstanceLocalBounds.Max * ActorScale);
+			SetProtoBox(*ActorState.add_instance_bounds(), InstanceScaledLocalBounds);
+		}
+	}
+
 	return ActorState;
 }
 
