@@ -39,6 +39,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category="TempoCoreUtils")
 	static FBox GetActorLocalBounds(const AActor* Actor, bool bIncludeHiddenComponents);
 
+	// Like GetActorLocalBounds, but returns one box per "instance" instead of a single union: one
+	// box per instance of each InstancedStaticMeshComponent (e.g. each tree in a HISM-based prop
+	// line) plus one box per other primitive component (mirroring GetActorLocalBounds's per-component
+	// contributions, just not unioned together). For Actors composed of many placed sub-objects
+	// rendered under one Actor for efficiency, this lets each sub-object still report a distinguishable
+	// bounds. Empty for Actors with no primitive components.
+	UFUNCTION(BlueprintCallable, Category="TempoCoreUtils")
+	static TArray<FBox> GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents);
+
 	// Returns a stable, round-trippable name for an actor, suitable for handing to an external
 	// client and using later to look the same actor back up (e.g. via GetActorWithName).
 	//
