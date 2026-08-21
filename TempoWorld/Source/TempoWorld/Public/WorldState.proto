@@ -85,6 +85,16 @@ message ActorStatesNearPositionRequest {
   bool include_hidden_components = 5;
 }
 
+message InstanceBounds {
+  // Axis-aligned box in this instance's own local frame -- NOT rotated by the instance's own
+  // placement, only scaled (scale baked in, as with ActorState.local_bounds).
+  TempoCore.Box local_bounds = 1;
+  // This instance's transform (location + rotation, no scale) relative to the Actor's frame. Combine
+  // with `local_bounds` to recover the instance's tight oriented box, the same way ActorState.transform
+  // + ActorState.local_bounds do for the whole Actor.
+  TempoCore.Transform transform = 2;
+}
+
 message ActorState {
   // Sim time at which the state was sampled, in seconds.
   double timestamp_s = 1;
@@ -99,12 +109,14 @@ message ActorState {
   // Axis-aligned bounding box in the actor's local frame, with the actor's scale baked in,
   // in meters. Combine with `transform` (location + rotation) to recover the tight oriented box.
   TempoCore.Box local_bounds = 6;
-  // Per-instance axis-aligned bounding boxes in the actor's local frame (scale baked in, as with
-  // `local_bounds`), for Actors composed of many placed sub-objects rendered under one Actor for
-  // efficiency (e.g. a line of trees rendered via one HierarchicalInstancedStaticMeshComponent).
-  // Empty for ordinary Actors; when non-empty, prefer these over `bounds`/`local_bounds` for
-  // obstacle purposes, since the latter only describe the union of every instance combined.
-  repeated TempoCore.Box instance_bounds = 7;
+  // Per-instance bounds for Actors composed of many placed sub-objects rendered under one Actor for
+  // efficiency (e.g. a line of trees rendered via one HierarchicalInstancedStaticMeshComponent). Each
+  // entry's `local_bounds` is axis-aligned in THAT INSTANCE's own frame, not the Actor's -- combine it
+  // with the entry's `transform` to get the instance's actual oriented box; do not treat
+  // `local_bounds` as already axis-aligned to the Actor or world. Empty for ordinary Actors; when
+  // non-empty, prefer these over `bounds`/`local_bounds` for obstacle purposes, since the latter only
+  // describe the union of every instance combined.
+  repeated InstanceBounds instance_bounds = 7;
 }
 
 message ActorStates {

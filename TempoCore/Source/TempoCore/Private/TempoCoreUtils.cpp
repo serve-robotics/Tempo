@@ -4,7 +4,9 @@
 
 #include "TempoBoundsHeightClampInterface.h"
 
+#include "Components/CapsuleComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/ShapeComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -37,7 +39,16 @@ namespace
 	{
 		if (MaxRelevantHeight.IsSet() && Box.IsValid)
 		{
-			Box.Max.Z = FMath::Min(Box.Max.Z, MaxRelevantHeight.GetValue());
+			// Clamp relative to this box's OWN base (Min.Z), not an absolute Z in the Actor's local
+			// frame. For a single placed prop those coincide (the Actor's origin sits at its base), but
+			// GetActorLocalInstanceBounds applies this same clamp to every per-instance box of a
+			// multi-instance Actor (e.g. each tree along a HISM-based ASplinePropLine); those instances
+			// sit away from the Actor's origin, at whatever height their own placement/terrain gives
+			// them, so clamping to an absolute Actor-local Z can push Max.Z below that instance's own
+			// Min.Z -- an inverted, degenerate box that fails to render downstream. Clamping relative to
+			// the box's own Min.Z keeps Max.Z >= Min.Z always, while still cutting off canopies/tall
+			// extents beyond MaxRelevantHeight above each instance's own base.
+			Box.Max.Z = FMath::Min(Box.Max.Z, Box.Min.Z + MaxRelevantHeight.GetValue());
 		}
 	}
 }
@@ -123,18 +134,73 @@ FBox UTempoCoreUtils::GetActorLocalBounds(const AActor* Actor, bool bIncludeHidd
 	return LocalBounds;
 }
 
-TArray<FBox> UTempoCoreUtils::GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents)
+TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents)
 {
+	const TOptional<float> MaxRelevantHeight = FindMaxRelevantBoundsHeight(Actor);
+
+	// An Actor with a movement CapsuleComponent (every ACharacter, including every pedestrian) is
+	// reported as exactly one instance box derived from the capsule's own shape, oriented to the
+	// capsule's own rotation -- instead of decomposing per skeletal-mesh sub-component below. A
+	// multi-part character rig can have several independently physics-asset-bearing skeletal meshes
+	// (body, head, clothing layers), which would otherwise report several overlapping boxes for what is
+	// visually one pedestrian. The capsule is used regardless of its own visibility (a Character's
+	// capsule is normally bHiddenInGame, which the bVisible-based skip below doesn't consider hidden
+	// anyway) since it's the actor's authoritative footprint whether or not it renders.
+	if (const UCapsuleComponent* CapsuleComponent = Actor->GetComponentByClass<UCapsuleComponent>())
+	{
+		const FTransform Placement = CapsuleComponent->GetComponentTransform().GetRelativeTransform(Actor->GetTransform());
+		const float Radius = CapsuleComponent->GetScaledCapsuleRadius();
+		const float HalfHeight = CapsuleComponent->GetScaledCapsuleHalfHeight();
+
+		FBox LocalBox(FVector(-Radius, -Radius, -HalfHeight), FVector(Radius, Radius, HalfHeight));
+		ClampBoxHeight(LocalBox, MaxRelevantHeight);
+
+		FTempoInstanceBounds Entry;
+		Entry.LocalBounds = LocalBox;
+		Entry.Transform = FTransform(Placement.GetRotation(), Placement.GetTranslation());
+		return { Entry };
+	}
+
 	TArray<UPrimitiveComponent*> PrimitiveComponents;
 	Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
 
-	const TOptional<float> MaxRelevantHeight = FindMaxRelevantBoundsHeight(Actor);
+	TArray<FTempoInstanceBounds> InstanceBounds;
 
-	TArray<FBox> InstanceBounds;
+	// Computes Placement's box in ITS OWN local frame (scale baked in, but NOT rotated by Placement's
+	// own rotation) plus the location+rotation needed to place and orient it relative to Actor --
+	// mirroring ActorState's local_bounds + transform, just per-instance, so a rotated instance is
+	// reported as an oriented box rather than an Actor-axis-aligned one. Clamping happens on the
+	// UN-rotated local box, where the box's own Min.Z is still that instance's own base, so the clamp
+	// is unaffected by whatever rotation the instance carries.
+	auto AddInstanceBounds = [&InstanceBounds, &MaxRelevantHeight](const FKAggregateGeom& AggGeom, const FTransform& Placement)
+	{
+		FBoxSphereBounds Bounds;
+		AggGeom.CalcBoxSphereBounds(Bounds, FTransform(FQuat::Identity, FVector::ZeroVector, Placement.GetScale3D()));
+		FBox LocalBox = Bounds.GetBox();
+		if (!LocalBox.IsValid)
+		{
+			return;
+		}
+		ClampBoxHeight(LocalBox, MaxRelevantHeight);
+
+		FTempoInstanceBounds Entry;
+		Entry.LocalBounds = LocalBox;
+		Entry.Transform = FTransform(Placement.GetRotation(), Placement.GetTranslation());
+		InstanceBounds.Add(Entry);
+	};
 
 	for (const UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
 		if (!PrimitiveComponent->IsVisible() && !bIncludeHiddenComponents)
+		{
+			continue;
+		}
+
+		// Pure collision proxies (e.g. a Character's movement CapsuleComponent) don't render anything
+		// of their own -- they duplicate whatever mesh they're attached to rather than representing a
+		// distinct placed sub-object, so they shouldn't get their own instance box here (they'd
+		// otherwise report a redundant near-duplicate box alongside that mesh's own contribution).
+		if (PrimitiveComponent->IsA<UShapeComponent>())
 		{
 			continue;
 		}
@@ -157,40 +223,43 @@ TArray<FBox> UTempoCoreUtils::GetActorLocalInstanceBounds(const AActor* Actor, b
 				{
 					continue;
 				}
-				const FTransform InstanceToActor = InstanceTransform * ComponentToActor;
-
-				FBoxSphereBounds Bounds;
-				BodySetup->AggGeom.CalcBoxSphereBounds(Bounds, InstanceToActor);
-				FBox InstanceBox = Bounds.GetBox();
-				ClampBoxHeight(InstanceBox, MaxRelevantHeight);
-				InstanceBounds.Add(InstanceBox);
+				AddInstanceBounds(BodySetup->AggGeom, InstanceTransform * ComponentToActor);
 			}
 			continue;
 		}
 
-		auto AddComponentBounds = [Actor, &InstanceBounds, &MaxRelevantHeight](const FKAggregateGeom& AggGeom, const FTransform& WorldTransform)
-		{
-			const FTransform RelativeTransform = WorldTransform.GetRelativeTransform(Actor->GetTransform());
-			FBoxSphereBounds Bounds;
-			AggGeom.CalcBoxSphereBounds(Bounds, RelativeTransform);
-			FBox ComponentBox = Bounds.GetBox();
-			ClampBoxHeight(ComponentBox, MaxRelevantHeight);
-			InstanceBounds.Add(ComponentBox);
-		};
-
 		if (const USkeletalMeshComponent* SkeletalMeshComponent = Cast<USkeletalMeshComponent>(PrimitiveComponent))
 		{
+			// Union every bone's body bounds into a single box for this component, rather than adding
+			// one box per bone -- a ragdoll-capable character's PhysicsAsset can have 20+ SkeletalBodySetups
+			// (one per bone), and this function's contract is one box PER COMPONENT (mirroring
+			// GetActorLocalBounds's per-component contributions), not per body within a component. Bones
+			// on the same skeleton can each carry a different rotation, so there's no single instance
+			// rotation to factor out here (unlike the ISM/other-component cases) -- this box stays
+			// axis-aligned to the Actor's own frame, reported with an identity Transform.
 			if (const UPhysicsAsset* PhysicsAsset = SkeletalMeshComponent->GetPhysicsAsset())
 			{
+				FBox SkeletalMeshBox(ForceInit);
 				for (const USkeletalBodySetup* SkeletalBodySetup : PhysicsAsset->SkeletalBodySetups)
 				{
-					AddComponentBounds(SkeletalBodySetup->AggGeom, SkeletalMeshComponent->GetBoneTransform(SkeletalBodySetup->BoneName));
+					const FTransform RelativeTransform = SkeletalMeshComponent->GetBoneTransform(SkeletalBodySetup->BoneName).GetRelativeTransform(Actor->GetTransform());
+					FBoxSphereBounds Bounds;
+					SkeletalBodySetup->AggGeom.CalcBoxSphereBounds(Bounds, RelativeTransform);
+					SkeletalMeshBox += Bounds.GetBox();
+				}
+				if (SkeletalMeshBox.IsValid)
+				{
+					ClampBoxHeight(SkeletalMeshBox, MaxRelevantHeight);
+					FTempoInstanceBounds Entry;
+					Entry.LocalBounds = SkeletalMeshBox;
+					Entry.Transform = FTransform::Identity;
+					InstanceBounds.Add(Entry);
 				}
 			}
 		}
 		else if (const UBodySetup* BodySetup = PrimitiveComponent->BodyInstance.GetBodySetup())
 		{
-			AddComponentBounds(BodySetup->AggGeom, PrimitiveComponent->GetComponentTransform());
+			AddInstanceBounds(BodySetup->AggGeom, PrimitiveComponent->GetComponentTransform().GetRelativeTransform(Actor->GetTransform()));
 		}
 	}
 

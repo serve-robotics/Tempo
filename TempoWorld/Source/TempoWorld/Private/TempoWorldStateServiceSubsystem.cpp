@@ -59,6 +59,24 @@ namespace
 		OutBox.mutable_max()->set_y(BoxMax.Y);
 		OutBox.mutable_max()->set_z(BoxMax.Z);
 	}
+
+	// Convert an Unreal-frame location (cm, left-handed) + rotation (deg, left-handed) to a Tempo
+	// proto Transform (m / rad, right-handed). Location and Rotation may be relative to an Actor's
+	// local frame rather than world -- the unit/handedness conversions are frame-agnostic.
+	void SetProtoTransform(TempoCore::Transform& OutTransform, const FVector& Location, const FRotator& Rotation)
+	{
+		const FVector ConvertedLocation = QuantityConverter<CM2M, L2R>::Convert(Location);
+		TempoCore::Vector* OutLocation = OutTransform.mutable_location();
+		OutLocation->set_x(ConvertedLocation.X);
+		OutLocation->set_y(ConvertedLocation.Y);
+		OutLocation->set_z(ConvertedLocation.Z);
+
+		const FRotator ConvertedRotation = QuantityConverter<Deg2Rad, L2R>::Convert(Rotation);
+		TempoCore::Rotation* OutRotation = OutTransform.mutable_rotation();
+		OutRotation->set_r(ConvertedRotation.Roll);
+		OutRotation->set_p(ConvertedRotation.Pitch);
+		OutRotation->set_y(ConvertedRotation.Yaw);
+	}
 }
 
 void UTempoWorldStateServiceSubsystem::RegisterServices(FTempoServer& Server)
@@ -249,15 +267,25 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 	SetProtoBox(*ActorState.mutable_bounds(), ActorWorldBounds);
 	SetProtoBox(*ActorState.mutable_local_bounds(), ActorScaledLocalBounds);
 
-	// Only worth sending when it actually decomposes into more than one box (e.g. a HISM-based line
-	// of trees) — for an ordinary single-mesh Actor this would just duplicate local_bounds above.
-	const TArray<FBox> ActorLocalInstanceBounds = UTempoCoreUtils::GetActorLocalInstanceBounds(Actor, bIncludeHiddenComponents);
-	if (ActorLocalInstanceBounds.Num() > 1)
+	// Sent whenever GetActorLocalInstanceBounds returns anything: usually that means it decomposed into
+	// more than one box (e.g. a HISM-based line of trees), but it can also be exactly one box that's
+	// still worth sending because it's NOT a duplicate of local_bounds above -- e.g. a pedestrian's
+	// single capsule-derived box, which is a tighter and correctly-oriented replacement for the
+	// generic per-component union local_bounds would otherwise report for a multi-part character rig.
+	const TArray<FTempoInstanceBounds> ActorLocalInstanceBounds = UTempoCoreUtils::GetActorLocalInstanceBounds(Actor, bIncludeHiddenComponents);
+	if (!ActorLocalInstanceBounds.IsEmpty())
 	{
-		for (const FBox& InstanceLocalBounds : ActorLocalInstanceBounds)
+		for (const FTempoInstanceBounds& Instance : ActorLocalInstanceBounds)
 		{
-			const FBox InstanceScaledLocalBounds(InstanceLocalBounds.Min * ActorScale, InstanceLocalBounds.Max * ActorScale);
-			SetProtoBox(*ActorState.add_instance_bounds(), InstanceScaledLocalBounds);
+			TempoWorld::InstanceBounds* InstanceBoundsProto = ActorState.add_instance_bounds();
+
+			// Instance.LocalBounds and Instance.Transform's location are both in the Actor's local,
+			// pre-Actor-scale frame (the same frame ActorLocalBounds is in above), so both get the
+			// Actor's scale baked in the same way ActorScaledLocalBounds does, keeping local_bounds and
+			// transform in the same scaled frame a client combines them in.
+			const FBox InstanceScaledLocalBounds(Instance.LocalBounds.Min * ActorScale, Instance.LocalBounds.Max * ActorScale);
+			SetProtoBox(*InstanceBoundsProto->mutable_local_bounds(), InstanceScaledLocalBounds);
+			SetProtoTransform(*InstanceBoundsProto->mutable_transform(), Instance.Transform.GetTranslation() * ActorScale, Instance.Transform.Rotator());
 		}
 	}
 

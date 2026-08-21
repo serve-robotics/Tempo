@@ -22,9 +22,12 @@ class TEMPOCORE_API ITempoBoundsHeightClampInterface
 	GENERATED_BODY()
 
 public:
-	// Maximum height, in cm above the Actor's local origin (Unreal native units), that
-	// GetActorLocalBounds should report for this Actor. Assumes the Actor's local Z origin sits at
-	// (or near) its base on the ground, as is typical for placed static props; if multiple components
-	// on the same Actor implement this interface, the smallest value wins.
+	// Maximum height, in cm above its own base (Unreal native units), that GetActorLocalBounds (or,
+	// per-instance, GetActorLocalInstanceBounds) should report. Applied relative to each reported box's
+	// own Min.Z -- not a single absolute Z in the Actor's local frame -- so it clamps correctly both for
+	// an ordinary single-box Actor (whose local origin sits at, or near, its base) and for a
+	// multi-instance Actor (e.g. each tree along a HISM-based prop line), where every instance has its
+	// own base at a different height. If multiple components on the same Actor implement this
+	// interface, the smallest value wins.
 	virtual float GetMaxRelevantBoundsHeight() const = 0;
 };
