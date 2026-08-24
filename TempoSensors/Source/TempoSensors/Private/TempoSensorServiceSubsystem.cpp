@@ -18,6 +18,29 @@
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "WorldPartition/WorldPartitionSubsystem.h"
+
+namespace
+{
+	// [GPUCrashInstr] Temporary instrumentation for Docs/Unreal56/Bugs/MASTER_gpu_crash_family.md's
+	// leading "streaming-capture race" hypothesis: correlate the crash frame against async-loading and
+	// world-partition streaming state at the two points in this subsystem that match the crash
+	// callstack (UWorld::Tick -> OnWorldTickStart -> BlockUntilMeasurementsReady, and the capture kickoff
+	// in OnWorldTickEnd). Warning level: Verbose/Log are suppressed in packaged runs. Strip once the
+	// hypothesis is confirmed or refuted.
+	void LogGpuCrashInstrState(const UWorld* World, const TCHAR* Site)
+	{
+		const bool bAsyncLoading = ::IsAsyncLoading();
+		bool bStreamingCompleted = true;
+		if (UWorldPartitionSubsystem* WPSubsystem = World->GetSubsystem<UWorldPartitionSubsystem>())
+		{
+			bStreamingCompleted = WPSubsystem->IsAllStreamingCompleted();
+		}
+		UE_LOG(LogTempoSensors, Warning,
+			TEXT("[GPUCrashInstr] %s Frame=%llu WorldTime=%.2f AsyncLoading=%d StreamingCompleted=%d"),
+			Site, GFrameCounter, World->GetTimeSeconds(), bAsyncLoading, bStreamingCompleted);
+	}
+}
 
 using SensorService = TempoSensors::SensorService;
 using SensorAsyncService = TempoSensors::SensorService::AsyncService;
@@ -88,6 +111,8 @@ void UTempoSensorServiceSubsystem::OnWorldTickEnd(UWorld* World, ELevelTick Tick
 	// networking) have completed, so transforms are fully settled and velocity vectors will be correct.
 	World->SendAllEndOfFrameUpdates();
 
+	LogGpuCrashInstrState(World, TEXT("PreExecutePendingCapture"));
+
 	ForEachActiveSensor([](ITempoSensorInterface* Sensor)
 	{
 		Sensor->ExecutePendingCapture();
@@ -129,11 +154,15 @@ void UTempoSensorServiceSubsystem::OnWorldTickStart(UWorld* World, ELevelTick Ti
 		if (GetDefault<UTempoCoreSettings>()->GetTimeMode() == ETimeMode::FixedStep
 			&& !GetDefault<UTempoSensorsSettings>()->GetPipelinedRendering())
 		{
+			LogGpuCrashInstrState(World, TEXT("PreBlockUntilMeasurementsReady"));
+
 			TRACE_CPUPROFILER_EVENT_SCOPE(TempoSensorsWaitForMeasurements);
 			ForEachActiveSensor([](const ITempoSensorInterface* Sensor)
 			{
 				Sensor->BlockUntilMeasurementsReady();
 			});
+
+			LogGpuCrashInstrState(World, TEXT("PostBlockUntilMeasurementsReady"));
 		}
 
 		TRACE_CPUPROFILER_EVENT_SCOPE(TempoSensorsSendMeasurements);
