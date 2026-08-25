@@ -245,8 +245,31 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 	ActorStateAngularVel->set_z(ActorAngularVelocity.Z);
 
 	const FBox ActorLocalBounds = UTempoCoreUtils::GetActorLocalBounds(Actor, bIncludeHiddenComponents);
+
+	// An invalid box means no component contributed any collision geometry -- the Actor has no
+	// BodySetup/AggGeom anywhere (collision disabled, or geometry that lives on instances of a
+	// component rather than on the Actor itself, as with a HISM-based ASplinePropLine). There is no
+	// meaningful box to send: the fields below are all zero, which a client can only read as a
+	// degenerate point-sized Actor. Warn once per Actor so a mis-set-up asset is diagnosable instead
+	// of silently arriving as a zero-extent obstacle. Note instance_bounds below may still be
+	// populated in exactly this case, and is the correct source for such an Actor.
+	if (!ActorLocalBounds.IsValid)
+	{
+		static TSet<FString> WarnedActors;
+		const FString ActorIdentifier = UTempoCoreUtils::GetActorIdentifier(Actor);
+		if (!WarnedActors.Contains(ActorIdentifier))
+		{
+			WarnedActors.Add(ActorIdentifier);
+			UE_LOG(LogTempoWorld, Warning, TEXT("Actor %s has no collision geometry on any component, so its "
+				"bounds/local_bounds are reported as zero. Check that its components have collision enabled "
+				"(a component with no BodySetup contributes nothing to bounds); if its geometry is instanced, "
+				"use instance_bounds instead."), *ActorIdentifier);
+		}
+	}
+
 	// The proto Box is axis-aligned in world space, so transform all 8 corners of the local box
 	// (TransformBy) rather than just Min/Max, which would be wrong whenever the Actor is rotated.
+	// TransformBy propagates invalidity as a zeroed box, so the invalid case stays zero, not garbage.
 	const FBox ActorWorldBounds = ActorLocalBounds.TransformBy(Actor->GetTransform());
 
 	// Local bounds with the Actor's scale baked in (the transmitted transform carries location and
