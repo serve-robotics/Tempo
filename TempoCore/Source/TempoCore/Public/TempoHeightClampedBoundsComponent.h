@@ -19,8 +19,9 @@ class TEMPOCORE_API UTempoHeightClampedBoundsComponent : public UActorComponent,
 public:
 	UTempoHeightClampedBoundsComponent();
 
-	// Maximum height, in cm above the owning Actor's local origin, to report in its Tempo bounds.
-	// Defaults to 250cm (2.5m), the top of the range a ground robot could plausibly interact with.
+	// Maximum height, in cm above each reported box's own base, to report in its Tempo bounds (see
+	// ITempoBoundsHeightClampInterface::GetMaxRelevantBoundsHeight). Defaults to 250cm (2.5m), the top
+	// of the range a ground robot could plausibly interact with.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tempo")
 	float MaxRelevantHeight = 250.0f;
 

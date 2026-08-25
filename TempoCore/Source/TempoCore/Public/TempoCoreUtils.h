@@ -6,6 +6,25 @@
 
 #include "TempoCoreUtils.generated.h"
 
+// One "instance" of a multi-instance Actor's decomposed bounds (see GetActorLocalInstanceBounds): a
+// box in that instance's own local frame (scaled, but NOT rotated by the instance's own placement)
+// plus the Transform (location + rotation, relative to the Actor) needed to place and orient it.
+// Mirrors ActorState's local_bounds + transform pattern, just per-instance instead of per-actor.
+USTRUCT(BlueprintType)
+struct FTempoInstanceBounds
+{
+	GENERATED_BODY()
+
+	// Axis-aligned box in this instance's own local frame (scale baked in, not rotated).
+	UPROPERTY(BlueprintReadOnly, Category = "TempoCoreUtils")
+	FBox LocalBounds = FBox(ForceInit);
+
+	// This instance's transform (location + rotation only, no scale -- already baked into LocalBounds)
+	// relative to the Actor.
+	UPROPERTY(BlueprintReadOnly, Category = "TempoCoreUtils")
+	FTransform Transform = FTransform::Identity;
+};
+
 UCLASS()
 class TEMPOCORE_API UTempoCoreUtils : public UBlueprintFunctionLibrary
 {
@@ -39,14 +58,25 @@ public:
 	UFUNCTION(BlueprintCallable, Category="TempoCoreUtils")
 	static FBox GetActorLocalBounds(const AActor* Actor, bool bIncludeHiddenComponents);
 
-	// Like GetActorLocalBounds, but returns one box per "instance" instead of a single union: one
-	// box per instance of each InstancedStaticMeshComponent (e.g. each tree in a HISM-based prop
-	// line) plus one box per other primitive component (mirroring GetActorLocalBounds's per-component
-	// contributions, just not unioned together). For Actors composed of many placed sub-objects
-	// rendered under one Actor for efficiency, this lets each sub-object still report a distinguishable
-	// bounds. Empty for Actors with no primitive components.
+	// Like GetActorLocalBounds, but returns one entry per "instance" instead of a single union: one
+	// per instance of each InstancedStaticMeshComponent (e.g. each tree in a HISM-based prop line)
+	// plus one per other primitive component (mirroring GetActorLocalBounds's per-component
+	// contributions, just not unioned together). Each entry's LocalBounds is axis-aligned in THAT
+	// INSTANCE's own frame, not the Actor's -- combine it with the entry's Transform to recover the
+	// instance's actual oriented box, the same way ActorState's local_bounds + transform do for the
+	// whole Actor. (The one exception is a skeletal mesh's per-bone union, which has no single instance
+	// rotation to factor out and so reports an identity Transform with its box already in the Actor's
+	// frame.) For Actors composed of many placed sub-objects rendered under one Actor for efficiency,
+	// this lets each sub-object still report a distinguishable, correctly-oriented bounds. Empty for
+	// Actors with no primitive components.
+	//
+	// SPECIAL CASE: an Actor with a movement CapsuleComponent (every ACharacter, including every
+	// pedestrian) always returns exactly one entry derived from the capsule's own shape and oriented to
+	// the capsule's own rotation, regardless of how many skeletal mesh sub-components it has -- a
+	// multi-part character rig would otherwise report one overlapping box per physics-asset-bearing
+	// skeletal mesh for what is visually one pedestrian.
 	UFUNCTION(BlueprintCallable, Category="TempoCoreUtils")
-	static TArray<FBox> GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents);
+	static TArray<FTempoInstanceBounds> GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents);
 
 	// Returns a stable, round-trippable name for an actor, suitable for handing to an external
 	// client and using later to look the same actor back up (e.g. via GetActorWithName).
