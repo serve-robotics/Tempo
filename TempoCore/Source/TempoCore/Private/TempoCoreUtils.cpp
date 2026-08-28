@@ -93,7 +93,15 @@ FBox UTempoCoreUtils::GetActorLocalBounds(const AActor* Actor, bool bIncludeHidd
 	TArray<UPrimitiveComponent*> PrimitiveComponents;
 	Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
 
-	FBox LocalBounds;
+	// ForceInit, NOT the default FBox() constructor: that one sets only IsValid=0 and leaves Min/Max
+	// deliberately uninitialized (see TBox's constructor comment in Box.h). Every accumulation below
+	// goes through operator+=, which correctly ignores an invalid box's contents, so garbage Min/Max
+	// is harmless as long as SOMETHING is accumulated. But an Actor whose components contribute no
+	// collision geometry at all -- a HISM-based ASplinePropLine whose instances live on the component
+	// rather than on the Actor, or a component with collision disabled and hence no BodySetup --
+	// leaves LocalBounds untouched, and then the raw stack garbage in Min/Max escapes this function.
+	// Callers that check only IsValid (or don't check at all) then read it as +/-inf or NaN.
+	FBox LocalBounds(ForceInit);
 
 	for (const UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
