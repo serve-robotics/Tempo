@@ -3,6 +3,7 @@
 #include "TempoCoreUtils.h"
 
 #include "TempoBoundsHeightClampInterface.h"
+#include "TempoInstanceBoundsFilterInterface.h"
 #include "TempoSegmentedSplineMeshBoundsInterface.h"
 
 #include "Components/CapsuleComponent.h"
@@ -133,6 +134,30 @@ namespace
 			Settings.ChordToleranceCm = FMath::Min(Settings.ChordToleranceCm, Implementer->GetSegmentedSplineMeshBoundsChordToleranceCm());
 		}
 		Settings.ChordToleranceCm = FMath::Max(Settings.ChordToleranceCm, 0.1f);
+		return Settings;
+	}
+
+	// Which whole categories of sub-geometry to include in an Actor's GetActorLocalInstanceBounds.
+	// See ITempoInstanceBoundsFilterInterface. Both report by default; several disagreeing
+	// implementers resolve conservatively (a logical AND -- any "off" wins), matching
+	// FSplineMeshBoundsSettings's own resolution rule above.
+	struct FInstanceBoundsFilterSettings
+	{
+		bool bReportInstancedMeshBounds = true;
+		bool bReportSplineMeshBounds = true;
+	};
+
+	FInstanceBoundsFilterSettings ResolveInstanceBoundsFilterSettings(const AActor* Actor)
+	{
+		const TArray<const ITempoInstanceBoundsFilterInterface*> Implementers =
+			FindBoundsInterfaceImplementers<UTempoInstanceBoundsFilterInterface, ITempoInstanceBoundsFilterInterface>(Actor);
+
+		FInstanceBoundsFilterSettings Settings;
+		for (const ITempoInstanceBoundsFilterInterface* Implementer : Implementers)
+		{
+			Settings.bReportInstancedMeshBounds = Settings.bReportInstancedMeshBounds && Implementer->ShouldReportInstancedMeshBounds();
+			Settings.bReportSplineMeshBounds = Settings.bReportSplineMeshBounds && Implementer->ShouldReportSplineMeshBounds();
+		}
 		return Settings;
 	}
 
@@ -529,6 +554,7 @@ void UTempoCoreUtils::AppendSplineMeshSegmentBounds(const USplineMeshComponent* 
 TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents)
 {
 	const TOptional<float> MaxRelevantHeight = FindMaxRelevantBoundsHeight(Actor);
+	const FInstanceBoundsFilterSettings BoundsFilter = ResolveInstanceBoundsFilterSettings(Actor);
 
 	// An Actor with a movement CapsuleComponent (every ACharacter, including every pedestrian) is
 	// reported as exactly one instance box derived from the capsule's own shape, oriented to the
@@ -599,6 +625,14 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 
 		if (const UInstancedStaticMeshComponent* InstancedMeshComponent = Cast<UInstancedStaticMeshComponent>(PrimitiveComponent))
 		{
+			// See ITempoInstanceBoundsFilterInterface -- excluded entirely (not even a fallback single
+			// box), since it still renders and the Actor has explicitly said this category shouldn't
+			// count as its own obstacle geometry.
+			if (!BoundsFilter.bReportInstancedMeshBounds)
+			{
+				continue;
+			}
+
 			const UStaticMesh* Mesh = InstancedMeshComponent->GetStaticMesh();
 			const UBodySetup* BodySetup = Mesh ? Mesh->GetBodySetup() : nullptr;
 			if (!BodySetup)
@@ -629,6 +663,14 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		// path is never worse than what existed before it.
 		if (const USplineMeshComponent* SplineMeshComponent = Cast<USplineMeshComponent>(PrimitiveComponent))
 		{
+			// See ITempoInstanceBoundsFilterInterface -- excluded entirely (not even the generic
+			// single-box fallback below), since it still renders and the Actor has explicitly said
+			// this category shouldn't count as its own obstacle geometry.
+			if (!BoundsFilter.bReportSplineMeshBounds)
+			{
+				continue;
+			}
+
 			const FSplineMeshBoundsSettings BoundsSettings = ResolveSplineMeshBoundsSettings(Actor);
 			if (BoundsSettings.bSegmented)
 			{

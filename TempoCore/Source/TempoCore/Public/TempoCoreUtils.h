@@ -82,6 +82,9 @@ public:
 	// decomposed into several straight, chord-fitted sub-segment boxes (see
 	// AppendSplineMeshSegmentBounds) instead of the single actor-axis-aligned box the generic
 	// per-component branch below would otherwise produce for it.
+	// Either an ITempoInstanceBoundsFilterInterface implementer can also exclude whichever whole
+	// category (InstancedStaticMesh instances, or SplineMesh segments) it doesn't want counted as
+	// this Actor's obstacle geometry -- both report by default.
 	UFUNCTION(BlueprintCallable, Category="TempoCoreUtils")
 	static TArray<FTempoInstanceBounds> GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents);
 
