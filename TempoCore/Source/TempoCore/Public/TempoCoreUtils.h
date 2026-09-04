@@ -6,6 +6,8 @@
 
 #include "TempoCoreUtils.generated.h"
 
+class USplineMeshComponent;
+
 // One "instance" of a multi-instance Actor's decomposed bounds (see GetActorLocalInstanceBounds): a
 // box in that instance's own local frame (scaled, but NOT rotated by the instance's own placement)
 // plus the Transform (location + rotation, relative to the Actor) needed to place and orient it.
@@ -75,8 +77,32 @@ public:
 	// the capsule's own rotation, regardless of how many skeletal mesh sub-components it has -- a
 	// multi-part character rig would otherwise report one overlapping box per physics-asset-bearing
 	// skeletal mesh for what is visually one pedestrian.
+	// SplineMeshComponent case: if the owning Actor's ITempoSegmentedSplineMeshBoundsInterface
+	// resolves to "segmented" (the default -- see that interface), a bent USplineMeshComponent is
+	// decomposed into several straight, chord-fitted sub-segment boxes (see
+	// AppendSplineMeshSegmentBounds) instead of the single actor-axis-aligned box the generic
+	// per-component branch below would otherwise produce for it.
+	// Either an ITempoInstanceBoundsFilterInterface implementer can also exclude whichever whole
+	// category (InstancedStaticMesh instances, or SplineMesh segments) it doesn't want counted as
+	// this Actor's obstacle geometry -- both report by default.
 	UFUNCTION(BlueprintCallable, Category="TempoCoreUtils")
 	static TArray<FTempoInstanceBounds> GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents);
+
+	// Decomposes SplineMeshComponent's DEFORMED geometry into one or more oriented sub-segment boxes,
+	// appended to OutInstanceBounds in the same frame every other GetActorLocalInstanceBounds entry
+	// uses: each LocalBounds is axis-aligned in that sub-segment's OWN frame (scale baked in, not
+	// rotated), and each Transform (location + rotation, no scale) places it relative to Actor.
+	// Subdivides until every sub-segment's chord stays within ChordToleranceCm of the mesh's true
+	// centreline (roll twist and cross-section scale drift are folded into the same cm budget, since
+	// both produce box error at zero centreline deviation). Reads the STATIC MESH's own BodySetup,
+	// never the component's own (SplineMeshComponent::RecreateCollision mutates the LATTER into
+	// already-deformed geometry -- reading it here would deform twice); falls back to the mesh's
+	// render bounds when that BodySetup has no collision elements (e.g. CTF_UseComplexAsSimple, whose
+	// AggGeom RecreateCollision empties outright), so a mesh that would otherwise report NO box still
+	// gets one. Appends nothing (leaving the caller to fall back to a single generic box) only if
+	// SplineMeshComponent has no static mesh or no resolvable cross-section at all.
+	static void AppendSplineMeshSegmentBounds(const USplineMeshComponent* SplineMeshComponent, const AActor* Actor,
+		float ChordToleranceCm, const TOptional<float>& MaxRelevantHeight, TArray<FTempoInstanceBounds>& OutInstanceBounds);
 
 	// Returns a stable, round-trippable name for an actor, suitable for handing to an external
 	// client and using later to look the same actor back up (e.g. via GetActorWithName).
