@@ -429,14 +429,36 @@ void UTempoCoreUtils::AppendSplineMeshSegmentBounds(const USplineMeshComponent* 
 		FMath::Max(FMath::Abs(SplineMeshComponent->SplineParams.StartScale.Y), FMath::Abs(SplineMeshComponent->SplineParams.EndScale.Y)));
 	const float ScaledCircumradius = CrossSectionCircumradius * FMath::Max(MaxCrossSectionScale.X, MaxCrossSectionScale.Y);
 
-	// Fast path: an untwisted, unscaled, straight stretch is exactly one box at zero extra cost, and is
-	// the overwhelmingly common case (ASplinePropLine already fragments a bent rail into one
-	// SplineMeshComponent per SpacingRange step). Guarantees straight content reports exactly as many
-	// boxes as it did before segmentation existed.
+	// A straight stretch still gets split into a few sub-boxes rather than one box spanning the whole
+	// component. Reported instance_bounds are consumed by an external per-frame query, and a single
+	// box covering an entire run means that if that ONE box's computation is ever skipped (e.g. the
+	// degenerate-slice `continue` below, or a transient failure upstream of this function), the whole
+	// stretch's reported bounds vanish at once -- whereas a curved run's fine-grained subdivision
+	// loses only a small fraction under the same failure rate, since it's covered by many small boxes
+	// instead of one long one. Confirmed live 2026-09-04: BP_SplineGrassStrip's straight runs were
+	// disappearing from Rerun far more often than its curved runs, matching exactly this asymmetry in
+	// how much of a stretch a single lost box takes down with it. Kept much coarser than the curved
+	// path's up-to-32 adaptive subdivision below -- this is purely for failure-isolation, not chord
+	// accuracy, so a handful of even sub-boxes is enough; MinSubSegmentLengthCm guards against
+	// over-subdividing a short component into slivers.
+	constexpr int32 MinSubSegmentsForStraightRuns = 4;
+	constexpr float MinSubSegmentLengthCm = 1.0f;
 	TArray<float> Boundaries;
 	if (IsEffectivelyStraight(SplineMeshComponent, DomainMin, DomainMax))
 	{
-		Boundaries = { DomainMin, DomainMax };
+		const float StraightSubSegmentLength = (DomainMax - DomainMin) / MinSubSegmentsForStraightRuns;
+		if (StraightSubSegmentLength >= MinSubSegmentLengthCm)
+		{
+			Boundaries.Reserve(MinSubSegmentsForStraightRuns + 1);
+			for (int32 i = 0; i <= MinSubSegmentsForStraightRuns; ++i)
+			{
+				Boundaries.Add(DomainMin + i * StraightSubSegmentLength);
+			}
+		}
+		else
+		{
+			Boundaries = { DomainMin, DomainMax };
+		}
 	}
 	else
 	{
