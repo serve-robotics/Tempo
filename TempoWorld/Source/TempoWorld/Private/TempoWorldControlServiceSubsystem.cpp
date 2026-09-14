@@ -234,8 +234,6 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 	}
 
 	FTransform SpawnTransform = ToUnrealTransform(Request.transform());
-	FVector SpawnLocation = SpawnTransform.GetLocation();
-	FRotator SpawnRotation = SpawnTransform.GetRotation().Rotator();
 
 	if (!Request.relative_to_actor().empty())
 	{
@@ -248,20 +246,37 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 			return;
 		}
 		SpawnTransform = SpawnTransform * RelativeToActor->GetActorTransform();
-		SpawnLocation = SpawnTransform.GetLocation();
-		SpawnRotation = SpawnTransform.GetRotation().Rotator();
 	}
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-	const AActor* SpawnedActor = Request.deferred()
-		? World->SpawnActorDeferred<AActor>(Class, SpawnTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn)
-		: World->SpawnActor(Class, &SpawnLocation, &SpawnRotation, SpawnParameters);
+	SpawnParameters.bDeferConstruction = Request.deferred();
+
+	const bool bNameRequested = !Request.name().empty();
+	if (bNameRequested)
+	{
+		const FString RequestedName(UTF8_TO_TCHAR(Request.name().c_str()));
+		if (RequestedName.Contains(TEXT(".")) || RequestedName.Contains(TEXT(":")))
+		{
+			const FString ErrorMsg = FString::Printf(TEXT("SpawnActor request name '%s' is invalid: '.' and ':' are object-path separators and are not allowed in a spawned actor name"), *RequestedName);
+			ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(grpc::INVALID_ARGUMENT, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
+			return;
+		}
+		SpawnParameters.Name = FName(*RequestedName);
+		// Fail loudly on collision rather than the enum's default (Required_Fatal, which asserts) or
+		// silently suffixing (Requested) -- genesis is the source of truth for the name it asked for.
+		SpawnParameters.NameMode = FActorSpawnParameters::ESpawnActorNameMode::Required_ErrorAndReturnNull;
+	}
+
+	const AActor* SpawnedActor = World->SpawnActor(Class, &SpawnTransform, SpawnParameters);
 
 	if (!SpawnedActor)
 	{
-		const FString ErrorMsg = FString::Printf(TEXT("Failed to spawn actor of type '%s' at location (%f, %f, %f)"), *ActorTypeName, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
-		ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(grpc::ABORTED, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
+		const FVector SpawnLocation = SpawnTransform.GetLocation();
+		const FString ErrorMsg = bNameRequested
+			? FString::Printf(TEXT("Failed to spawn actor of type '%s': requested name '%s' is already in use"), *ActorTypeName, UTF8_TO_TCHAR(Request.name().c_str()))
+			: FString::Printf(TEXT("Failed to spawn actor of type '%s' at location (%f, %f, %f)"), *ActorTypeName, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
+		ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(bNameRequested ? grpc::ALREADY_EXISTS : grpc::ABORTED, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 		return;
 	}
 

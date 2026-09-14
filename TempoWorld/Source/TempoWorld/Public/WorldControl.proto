@@ -14,6 +14,10 @@ message SpawnActorRequest {
   TempoCore.Transform transform = 3;
   // Optional actor name that `transform` is interpreted relative to.
   string relative_to_actor = 4;
+  // Optional requested name for the spawned actor. Empty (default) keeps today's engine-generated
+  // [Class]_[Number] name. If set and already in use in the level, the spawn fails with
+  // ALREADY_EXISTS rather than silently falling back to an auto-generated name.
+  string name = 5;
 }
 
 message SpawnActorResponse {
