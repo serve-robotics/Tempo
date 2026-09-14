@@ -93,6 +93,11 @@ message InstanceBounds {
   // with `local_bounds` to recover the instance's tight oriented box, the same way ActorState.transform
   // + ActorState.local_bounds do for the whole Actor.
   TempoCore.Transform transform = 2;
+  // Optional semantic label for this instance, from the source component's
+  // ITempoInstanceBoundsTagInterface implementer (if any). Empty (default) means "no tag" -- a
+  // consumer falls back to whatever class/name-based labeling it already does. A non-empty tag is
+  // authoritative for this specific cuboid.
+  string tag = 3;
 }
 
 message ActorState {

@@ -4,6 +4,7 @@
 
 #include "TempoBoundsHeightClampInterface.h"
 #include "TempoInstanceBoundsFilterInterface.h"
+#include "TempoInstanceBoundsTagInterface.h"
 #include "TempoSegmentedSplineMeshBoundsInterface.h"
 
 #include "Components/CapsuleComponent.h"
@@ -202,6 +203,27 @@ namespace
 			Settings.bReportSplineMeshBounds = Settings.bReportSplineMeshBounds && Implementer->ShouldReportSplineMeshBounds();
 		}
 		return Settings;
+	}
+
+	// Tag for cuboids sourced from SourceComponent, from Actor's (or one of its components')
+	// ITempoInstanceBoundsTagInterface implementer, or empty if none exists or none returns a tag for
+	// this specific component. Unlike the filter/segmentation settings above, this resolves PER
+	// COMPONENT (a tag is meaningless aggregated across an Actor's whole mesh pool), so it is not
+	// cached once per Actor -- called fresh for each component GetActorLocalInstanceBounds visits.
+	// First non-empty tag wins if more than one implementer somehow exists on the same Actor.
+	FString ResolveInstanceBoundsTag(const AActor* Actor, const UPrimitiveComponent* SourceComponent)
+	{
+		const TArray<const ITempoInstanceBoundsTagInterface*> Implementers =
+			FindBoundsInterfaceImplementers<UTempoInstanceBoundsTagInterface, ITempoInstanceBoundsTagInterface>(Actor);
+		for (const ITempoInstanceBoundsTagInterface* Implementer : Implementers)
+		{
+			FString Tag = Implementer->GetInstanceBoundsTag(SourceComponent);
+			if (!Tag.IsEmpty())
+			{
+				return Tag;
+			}
+		}
+		return FString();
 	}
 
 	// The static mesh's own collision cross-section, in the mesh's UNDEFORMED local space. Reads the
@@ -421,7 +443,7 @@ FBox UTempoCoreUtils::GetActorLocalBounds(const AActor* Actor, bool bIncludeHidd
 
 void UTempoCoreUtils::AppendSplineMeshSegmentBounds(const USplineMeshComponent* SplineMeshComponent, const AActor* Actor,
 	float ChordToleranceCm, float TargetCuboidsPerMeter, float MaxCuboidLengthCm,
-	const TOptional<float>& MaxRelevantHeight, TArray<FTempoInstanceBounds>& OutInstanceBounds)
+	const TOptional<float>& MaxRelevantHeight, const FString& Tag, TArray<FTempoInstanceBounds>& OutInstanceBounds)
 {
 	const UStaticMesh* Mesh = SplineMeshComponent->GetStaticMesh();
 	if (!Mesh)
@@ -704,6 +726,7 @@ void UTempoCoreUtils::AppendSplineMeshSegmentBounds(const USplineMeshComponent* 
 		FTempoInstanceBounds Entry;
 		Entry.LocalBounds = LocalBox;
 		Entry.Transform = FTransform(Rotation, Center);
+		Entry.Tag = Tag;
 		OutInstanceBounds.Add(Entry);
 	}
 }
@@ -747,7 +770,7 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 	// reported as an oriented box rather than an Actor-axis-aligned one. Clamping happens on the
 	// UN-rotated local box, where the box's own Min.Z is still that instance's own base, so the clamp
 	// is unaffected by whatever rotation the instance carries.
-	auto AddInstanceBounds = [&InstanceBounds, &MaxRelevantHeight](const FKAggregateGeom& AggGeom, const FTransform& Placement)
+	auto AddInstanceBounds = [&InstanceBounds, &MaxRelevantHeight](const FKAggregateGeom& AggGeom, const FTransform& Placement, const FString& Tag)
 	{
 		FBoxSphereBounds Bounds;
 		AggGeom.CalcBoxSphereBounds(Bounds, FTransform(FQuat::Identity, FVector::ZeroVector, Placement.GetScale3D()));
@@ -761,6 +784,7 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		FTempoInstanceBounds Entry;
 		Entry.LocalBounds = LocalBox;
 		Entry.Transform = FTransform(Placement.GetRotation(), Placement.GetTranslation());
+		Entry.Tag = Tag;
 		InstanceBounds.Add(Entry);
 	};
 
@@ -797,6 +821,7 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 				continue;
 			}
 
+			const FString ComponentTag = ResolveInstanceBoundsTag(Actor, InstancedMeshComponent);
 			const FTransform ComponentToActor = InstancedMeshComponent->GetComponentTransform().GetRelativeTransform(Actor->GetTransform());
 			const int32 NumInstances = InstancedMeshComponent->GetInstanceCount();
 			for (int32 InstanceIndex = 0; InstanceIndex < NumInstances; ++InstanceIndex)
@@ -806,7 +831,7 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 				{
 					continue;
 				}
-				AddInstanceBounds(BodySetup->AggGeom, InstanceTransform * ComponentToActor);
+				AddInstanceBounds(BodySetup->AggGeom, InstanceTransform * ComponentToActor, ComponentTag);
 			}
 			continue;
 		}
@@ -828,13 +853,14 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 				continue;
 			}
 
+			const FString ComponentTag = ResolveInstanceBoundsTag(Actor, SplineMeshComponent);
 			const FSplineMeshBoundsSettings BoundsSettings = ResolveSplineMeshBoundsSettings(Actor);
 			if (BoundsSettings.bSegmented)
 			{
 				const int32 CountBefore = InstanceBounds.Num();
 				UTempoCoreUtils::AppendSplineMeshSegmentBounds(SplineMeshComponent, Actor,
 					BoundsSettings.ChordToleranceCm, BoundsSettings.TargetCuboidsPerMeter, BoundsSettings.MaxCuboidLengthCm,
-					MaxRelevantHeight, InstanceBounds);
+					MaxRelevantHeight, ComponentTag, InstanceBounds);
 				if (InstanceBounds.Num() > CountBefore)
 				{
 					continue;
@@ -874,7 +900,8 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		}
 		else if (const UBodySetup* BodySetup = PrimitiveComponent->BodyInstance.GetBodySetup())
 		{
-			AddInstanceBounds(BodySetup->AggGeom, PrimitiveComponent->GetComponentTransform().GetRelativeTransform(Actor->GetTransform()));
+			AddInstanceBounds(BodySetup->AggGeom, PrimitiveComponent->GetComponentTransform().GetRelativeTransform(Actor->GetTransform()),
+				ResolveInstanceBoundsTag(Actor, PrimitiveComponent));
 		}
 	}
 

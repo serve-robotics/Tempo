@@ -25,6 +25,12 @@ struct FTempoInstanceBounds
 	// relative to the Actor.
 	UPROPERTY(BlueprintReadOnly, Category = "TempoCoreUtils")
 	FTransform Transform = FTransform::Identity;
+
+	// Optional semantic label for this instance, from the source component's
+	// ITempoInstanceBoundsTagInterface implementer (if any). Empty means "no tag" -- a caller falls
+	// back to whatever labeling it already does (e.g. class/name-based). See that interface.
+	UPROPERTY(BlueprintReadOnly, Category = "TempoCoreUtils")
+	FString Tag;
 };
 
 UCLASS()
@@ -109,7 +115,7 @@ public:
 	// SplineMeshComponent has no static mesh or no resolvable cross-section at all.
 	static void AppendSplineMeshSegmentBounds(const USplineMeshComponent* SplineMeshComponent, const AActor* Actor,
 		float ChordToleranceCm, float TargetCuboidsPerMeter, float MaxCuboidLengthCm,
-		const TOptional<float>& MaxRelevantHeight, TArray<FTempoInstanceBounds>& OutInstanceBounds);
+		const TOptional<float>& MaxRelevantHeight, const FString& Tag, TArray<FTempoInstanceBounds>& OutInstanceBounds);
 
 	// Returns a stable, round-trippable name for an actor, suitable for handing to an external
 	// client and using later to look the same actor back up (e.g. via GetActorWithName).
