@@ -7,6 +7,7 @@
 #include "TempoInstanceBoundsTagInterface.h"
 #include "TempoSegmentedSplineMeshBoundsInterface.h"
 
+#include "ChaosWheeledVehicleMovementComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/ShapeComponent.h"
@@ -757,6 +758,26 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		Entry.LocalBounds = LocalBox;
 		Entry.Transform = FTransform(Placement.GetRotation(), Placement.GetTranslation());
 		return { Entry };
+	}
+
+	// Same one-box rule as the capsule case above, for the other kind of multi-part rig: a wheeled
+	// vehicle. A CitySample vehicle Blueprint carries a skeletal body mesh, a near-identical static
+	// body mesh and four separately-placed wheel meshes, so decomposing per component reports the
+	// body twice plus a ~25cm box per wheel -- 4 boxes for what is visually one car. Keyed on the
+	// movement component rather than AWheeledVehiclePawn so a vehicle built on a plain AActor/APawn
+	// still collapses. GetActorLocalBounds unions exactly the same per-component collision geometry
+	// this function would otherwise enumerate (and applies the same height clamp), so the result is
+	// the vehicle's own footprint, axis-aligned in its frame like the skeletal-mesh case below.
+	if (Actor->GetComponentByClass<UChaosWheeledVehicleMovementComponent>())
+	{
+		const FBox LocalBox = GetActorLocalBounds(Actor, bIncludeHiddenComponents);
+		if (LocalBox.IsValid)
+		{
+			FTempoInstanceBounds Entry;
+			Entry.LocalBounds = LocalBox;
+			Entry.Transform = FTransform::Identity;
+			return { Entry };
+		}
 	}
 
 	TArray<UPrimitiveComponent*> PrimitiveComponents;
