@@ -112,7 +112,10 @@ void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 	for (const FMassTrafficZoneGraphData& TrafficZoneGraphData : MassTrafficSubsystem->GetTrafficZoneGraphData())
 	{
 		const FZoneGraphStorage* ZoneGraphStorage = ZoneGraphSubsystem->GetZoneGraphStorage(TrafficZoneGraphData.DataHandle);
-		check(ZoneGraphStorage);
+		if (!ZoneGraphStorage)
+		{
+			continue;
+		}
 
 		// Filter lanes to ensure we never spawn on merging or splitting lanes
 		auto LaneFilterFunction = [&](const FZoneGraphStorage&, int32 LaneIndex)

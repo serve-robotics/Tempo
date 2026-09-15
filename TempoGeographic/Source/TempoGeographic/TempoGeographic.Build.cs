@@ -7,29 +7,28 @@ public class TempoGeographic : TempoModuleRules
 	public TempoGeographic(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-		
+
 		PublicIncludePaths.AddRange(
 			new string[] {
 			}
 			);
-				
-		
+
+
 		PrivateIncludePaths.AddRange(
 			new string[] {
 			}
 			);
-			
-		
+
+
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
 				"Core",
-				"TempoCoreShared",
-				"TempoScripting",
+				"TempoCore",
 			}
 			);
-			
-		
+
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
@@ -39,13 +38,10 @@ public class TempoGeographic : TempoModuleRules
 				"GeoReferencing",
 				"Slate",
 				"SlateCore",
-				// Tempo
-				"TempoTime",
-				"TempoCoreShared",
 			}
 			);
-		
-		
+
+
 		DynamicallyLoadedModuleNames.AddRange(
 			new string[]
 			{

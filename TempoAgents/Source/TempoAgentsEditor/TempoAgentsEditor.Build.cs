@@ -7,21 +7,21 @@ public class TempoAgentsEditor : TempoModuleRules
 	public TempoAgentsEditor(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-		
+
 		PublicIncludePaths.AddRange(
 			new string[]
 			{
 			}
 			);
-				
-		
+
+
 		PrivateIncludePaths.AddRange(
 			new string[]
 			{
 			}
 			);
-			
-		
+
+
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
@@ -29,8 +29,8 @@ public class TempoAgentsEditor : TempoModuleRules
 				"Engine",
 			}
 			);
-			
-		
+
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
@@ -47,10 +47,8 @@ public class TempoAgentsEditor : TempoModuleRules
 				"ToolMenus",
 				"ZoneGraph",
 				// Tempo
-				"TempoAgentsShared",
 				"TempoAgents",
-				"TempoScripting",
-				"TempoCoreShared",
+				"TempoCore",
 			}
 			);
 

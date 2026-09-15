@@ -15,6 +15,12 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 UNREAL_ENGINE_PATH=$("$SCRIPT_DIR"/FindUnreal.sh)
 UNREAL_ENGINE_PATH="${UNREAL_ENGINE_PATH//\\//}"
 
+# Get engine release (e.g. 5.6)
+if [ -f "$UNREAL_ENGINE_PATH/Engine/Intermediate/Build/BuildRules/UE5RulesManifest.json" ]; then
+  UNREAL_VERSION_WITH_HOTFIX=$(jq -r '.EngineVersion' "$UNREAL_ENGINE_PATH/Engine/Intermediate/Build/BuildRules/UE5RulesManifest.json")
+  UNREAL_VERSION="${UNREAL_VERSION_WITH_HOTFIX%.*}"
+fi
+
 # Check for jq
 if ! which jq &> /dev/null; then
   echo "Couldn't find jq"
@@ -66,12 +72,21 @@ SYNC_THIRD_PARTY_DEPS () {
   MANIFEST_FILE=$1
   FORCE_ARG=$2
   THIRD_PARTY_DIR=$(dirname "$MANIFEST_FILE")
-  ARTIFACT=$(jq -r '.artifact' < "$MANIFEST_FILE")
-  RELEASE_NAME=$(jq -r '.release' < "$MANIFEST_FILE")
+
+  if ! jq -e --arg unreal_version "$UNREAL_VERSION" 'has($unreal_version)' < "$MANIFEST_FILE" > /dev/null; then
+    echo "Error: TempoCore does not support Unreal Engine release $UNREAL_VERSION (found via UNREAL_ENGINE_PATH environment variable at $UNREAL_ENGINE_PATH)"
+    SUPPORTED_RELEASES=$(jq -r 'keys | join(", ")' "$MANIFEST_FILE")
+    echo "Supported Unreal Engine releases are: $SUPPORTED_RELEASES"
+    echo "Please install a supported Unreal Engine release and try again"
+    exit 1
+  fi
+
+  ARTIFACT=$(jq -r --arg unreal_version "$UNREAL_VERSION" '.[$unreal_version].artifact' < "$MANIFEST_FILE")
+  RELEASE_NAME=$(jq -r --arg unreal_version "$UNREAL_VERSION" --arg platform "$PLATFORM" '.[$unreal_version].release[$platform]' < "$MANIFEST_FILE")
   if [ "$PLATFORM" = "Windows" ] && [ $LINUX_CC -ne 0 ]; then
-    EXPECTED_HASH=$(jq -r '.md5_hashes."Windows+Linux"' < "$MANIFEST_FILE")
+    EXPECTED_HASH=$(jq -r --arg unreal_version "$UNREAL_VERSION" '.[$unreal_version].md5_hashes."Windows+Linux"' < "$MANIFEST_FILE")
   else
-    EXPECTED_HASH=$(jq -r --arg platform "$PLATFORM" '.md5_hashes | .[$platform]' < "$MANIFEST_FILE")
+    EXPECTED_HASH=$(jq -r --arg unreal_version "$UNREAL_VERSION" --arg platform "$PLATFORM" '.[$unreal_version].md5_hashes | .[$platform]' < "$MANIFEST_FILE")
   fi
   
   DO_UPDATE="N"
@@ -102,12 +117,24 @@ SYNC_THIRD_PARTY_DEPS () {
   PULL_DEPENDENCIES () {
     TARGET_PLATFORM=$1
     
-    RELEASE_INFO=$(curl -L -J \
+    AUTH_HEADER=()
+    if [ -n "$GITHUB_TOKEN" ]; then
+      AUTH_HEADER=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    fi
+    RELEASE_INFO=$(curl -fsSL -J \
+                   "${AUTH_HEADER[@]}" \
                    -H "Accept: application/vnd.github+json" \
                    -H "X-GitHub-Api-Version: 2022-11-28" \
                    https://api.github.com/repos/tempo-sim/TempoThirdParty/releases)
-              
-    ARCHIVE_NAME=$(echo "$RELEASE_INFO" | jq -r --arg release "$RELEASE_NAME" --arg platform "$TARGET_PLATFORM" --arg artifact "$ARTIFACT" '.[] | select(.name == $release) | .assets[] | select(.name | test(".*-" + $artifact + "-" + $platform + "-.*")) | .name')     
+
+    if ! echo "$RELEASE_INFO" | jq -e 'type == "array"' > /dev/null; then
+      echo "GitHub API did not return a release list (likely rate-limited or transient error). Response:" >&2
+      echo "$RELEASE_INFO" | head -c 500 >&2
+      echo "" >&2
+      exit 1
+    fi
+
+    ARCHIVE_NAME=$(echo "$RELEASE_INFO" | jq -r --arg release "$RELEASE_NAME" --arg platform "$TARGET_PLATFORM" --arg artifact "$ARTIFACT" '.[] | select(.name == $release) | .assets[] | select(.name | test(".*-" + $artifact + "-" + $platform + "-.*")) | .name')
     URL=$(echo "$RELEASE_INFO" | jq -r --arg release "$RELEASE_NAME" --arg platform "$TARGET_PLATFORM" --arg artifact "$ARTIFACT" '.[] | select(.name == $release) | .assets[] | select(.name | test(".*-" + $artifact + "-" + $platform + "-.*")) | .url')
     
     if [ "$ARCHIVE_NAME" = "" ] || [ "$ARCHIVE_NAME" = "URL" ]; then
@@ -169,15 +196,14 @@ FIND_PLUGIN() {
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 TEMPO_ROOT=$(realpath "$SCRIPT_DIR/..")
-MANIFEST_FILES=$(find "$TEMPO_ROOT" -name ttp_manifest.json -path "*Source*")
-for MANIFEST_FILE in ${MANIFEST_FILES[@]}; do
+while IFS= read -r MANIFEST_FILE <&3; do
   PLUGIN_DIR=$(FIND_PLUGIN "$MANIFEST_FILE")
   if [ -f "$PLUGIN_DIR/Scripts/SyncDeps.sh" ]; then
     # This plugin manages its own dependencies
     continue
   fi
   SYNC_THIRD_PARTY_DEPS "$MANIFEST_FILE" "$1"
-done
+done 3< <(find "$TEMPO_ROOT" -name ttp_manifest.json -path "*Source*")
 
 # Cleanup
 rm -rf "$TEMP"

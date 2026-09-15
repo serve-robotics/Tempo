@@ -2,6 +2,7 @@
 
 #include "TempoGeographicServiceSubsystem.h"
 
+#include "TempoConversion.h"
 #include "TempoDateTimeSystem.h"
 #include "TempoGeographic.h"
 #include "TempoGeoReferencingSystem.h"
@@ -30,9 +31,9 @@ ATempoDateTimeSystem* GetTempoDateTimeSystem(const UObject* WorldContextObject)
 	return Cast<ATempoDateTimeSystem>(Actors[0]);
 }
 
-void UTempoGeographicServiceSubsystem::RegisterScriptingServices(FTempoScriptingServer& ScriptingServer)
+void UTempoGeographicServiceSubsystem::RegisterServices(FTempoServer& Server)
 {
-	ScriptingServer.RegisterService<GeographicService>(
+	Server.RegisterService<GeographicService>(
 		SimpleRequestHandler(&GeographicAsyncService::RequestSetDate, &UTempoGeographicServiceSubsystem::SetDate),
 		SimpleRequestHandler(&GeographicAsyncService::RequestSetTimeOfDay, &UTempoGeographicServiceSubsystem::SetTimeOfDay),
 		SimpleRequestHandler(&GeographicAsyncService::RequestSetDayCycleRelativeRate, &UTempoGeographicServiceSubsystem::SetDayCycleRelativeRate),
@@ -45,64 +46,64 @@ void UTempoGeographicServiceSubsystem::Initialize(FSubsystemCollectionBase& Coll
 {
 	Super::Initialize(Collection);
 
-	FTempoScriptingServer::Get().ActivateService<GeographicService>(this);
+	FTempoServer::Get().ActivateService<GeographicService>(this);
 }
 
 void UTempoGeographicServiceSubsystem::Deinitialize()
 {
 	Super::Deinitialize();
 
-	FTempoScriptingServer::Get().DeactivateService<GeographicService>();
+	FTempoServer::Get().DeactivateService<GeographicService>();
 }
 
-void UTempoGeographicServiceSubsystem::SetDate(const TempoGeographic::Date& Request, const TResponseDelegate<TempoScripting::Empty>& ResponseContinuation)
+void UTempoGeographicServiceSubsystem::SetDate(const TempoGeographic::Date& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation)
 {
 	if (ATempoDateTimeSystem* DateTimeSystem = GetTempoDateTimeSystem(this))
 	{
 		const FDateTime CurrentDateTime = DateTimeSystem->GetSimDateTime();
 		if (!FDateTime::Validate(Request.year(), Request.month(), Request.day(), CurrentDateTime.GetHour(), CurrentDateTime.GetMinute(), CurrentDateTime.GetSecond(), CurrentDateTime.GetMillisecond()))
 		{
-			ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status(grpc::StatusCode::OUT_OF_RANGE, "Invalid date provided"));
+			ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::StatusCode::OUT_OF_RANGE, "Invalid date provided"));
 			return;
 		}
 		const FDateTime RequestedDateTime(Request.year(), Request.month(), Request.day(), CurrentDateTime.GetHour(), CurrentDateTime.GetMinute(), CurrentDateTime.GetSecond(), CurrentDateTime.GetMillisecond());
 		DateTimeSystem->AdvanceSimDateTime(RequestedDateTime - CurrentDateTime);
-		ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status_OK);
+		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
 		return;
 	}
-	ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "No TempoDateTime actor found"));
+	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "No TempoDateTime actor found"));
 }
 
-void UTempoGeographicServiceSubsystem::SetTimeOfDay(const TempoGeographic::TimeOfDay& Request, const TResponseDelegate<TempoScripting::Empty>& ResponseContinuation)
+void UTempoGeographicServiceSubsystem::SetTimeOfDay(const TempoGeographic::TimeOfDay& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation)
 {
 	if (ATempoDateTimeSystem* DateTimeSystem = GetTempoDateTimeSystem(this))
 	{
 		const FDateTime CurrentDateTime = DateTimeSystem->GetSimDateTime();
 		if (!FDateTime::Validate(CurrentDateTime.GetYear(), CurrentDateTime.GetMonth(), CurrentDateTime.GetDay(), Request.hour(), Request.minute(), Request.second(), 0))
 		{
-			ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status(grpc::StatusCode::OUT_OF_RANGE, "Invalid time provided"));
+			ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::StatusCode::OUT_OF_RANGE, "Invalid time provided"));
 			return;
 		}
 		const FDateTime RequestedDateTime(CurrentDateTime.GetYear(), CurrentDateTime.GetMonth(), CurrentDateTime.GetDay(), Request.hour(), Request.minute(), Request.second(), 0);
 		DateTimeSystem->AdvanceSimDateTime(RequestedDateTime - CurrentDateTime);
-		ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status_OK);
+		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
 		return;
 	}
-	ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "No TempoDateTime actor found"));
+	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "No TempoDateTime actor found"));
 }
 
-void UTempoGeographicServiceSubsystem::SetDayCycleRelativeRate(const TempoGeographic::DayCycleRateRequest& Request, const TResponseDelegate<TempoScripting::Empty>& ResponseContinuation)
+void UTempoGeographicServiceSubsystem::SetDayCycleRelativeRate(const TempoGeographic::DayCycleRateRequest& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation)
 {
 	if (ATempoDateTimeSystem* DateTimeSystem = GetTempoDateTimeSystem(this))
 	{
 		DateTimeSystem->SetDayCycleRelativeRate(Request.rate());
-		ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status_OK);
+		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
 		return;
 	}
-	ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "No TempoDateTime actor found"));
+	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "No TempoDateTime actor found"));
 }
 
-void UTempoGeographicServiceSubsystem::GetDateTime(const TempoScripting::Empty& Request, const TResponseDelegate<TempoGeographic::DateTime>& ResponseContinuation)
+void UTempoGeographicServiceSubsystem::GetDateTime(const TempoCore::Empty& Request, const TResponseDelegate<TempoGeographic::DateTime>& ResponseContinuation)
 {
 	TempoGeographic::DateTime Response;
 	if (ATempoDateTimeSystem* DateTimeSystem = GetTempoDateTimeSystem(this))
@@ -120,18 +121,21 @@ void UTempoGeographicServiceSubsystem::GetDateTime(const TempoScripting::Empty& 
 	ResponseContinuation.ExecuteIfBound(Response, grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "No TempoDateTime actor found"));
 }
 
-void UTempoGeographicServiceSubsystem::SetGeographicReference(const TempoGeographic::GeographicCoordinate& Request, const TResponseDelegate<TempoScripting::Empty>& ResponseContinuation)
+void UTempoGeographicServiceSubsystem::SetGeographicReference(const TempoGeographic::GeographicReference& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation)
 {
 	if (ATempoGeoReferencingSystem* GeoReferencingSystem = Cast<ATempoGeoReferencingSystem>(AGeoReferencingSystem::GetGeoReferencingSystem(this)))
 	{
-		GeoReferencingSystem->OriginLatitude = Request.latitude();
-		GeoReferencingSystem->OriginLongitude = Request.longitude();
-		GeoReferencingSystem->OriginAltitude = Request.altitude();
+		GeoReferencingSystem->OriginLatitude = Request.origin().latitude_deg();
+		GeoReferencingSystem->OriginLongitude = Request.origin().longitude_deg();
+		GeoReferencingSystem->OriginAltitude = Request.origin().altitude_m();
+		// Rotation arrives in radians, right-handed (roll, pitch, yaw); convert to Unreal's degrees, left-handed.
+		GeoReferencingSystem->OriginRotation = QuantityConverter<Rad2Deg, R2L>::Convert(
+			FRotator(Request.rotation().p(), Request.rotation().y(), Request.rotation().r()));
 		// Ideally we would have overriden ApplySettings to do the broadcast but it is not virtual.
 		GeoReferencingSystem->ApplySettings();
 		GeoReferencingSystem->BroadcastGeographicReferenceChanged();
-		ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status_OK);
+		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
 		return;
 	}
-	ResponseContinuation.ExecuteIfBound(TempoScripting::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "GeoReferencingSystem not found"));
+	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "GeoReferencingSystem not found"));
 }
