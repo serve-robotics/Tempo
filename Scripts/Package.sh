@@ -210,6 +210,23 @@ PACKAGE_PYTHON_PACKAGE() {
   echo "Packaging Python package $DIST_NAME -> $DEST"
   rm -rf "$DEST"
   mkdir -p "$DEST"
+  # Reproducible wheels: without this, every zip entry carries its source file's mtime, and the
+  # codegen step rewrites tempo_sim/*.py on every prebuild — so a rebuild with zero code changes
+  # produced a different sha256. That made "same version, different content" (the thing genesis'
+  # build.sh warns about, and the only guard against a mutated wheel under a frozen version) fire
+  # on virtually every build, i.e. pure noise. Pinning the timestamps makes a hash difference mean
+  # an actual content difference.
+  #
+  # HEAD's commit time, not `now`: the value must be a function of the source, or the hash still
+  # changes per build. A dirty tree therefore hashes as its committed HEAD — acceptable, since the
+  # comparison is between a *packaged* build and the registry, and packaging a dirty tree is
+  # already unsupported. Fixed fallback (2020-01-01) when git is unavailable, e.g. an sdist build.
+  local SOURCE_DATE_EPOCH
+  SOURCE_DATE_EPOCH=$(git -C "$PKG_DIR" log -1 --pretty=%ct 2>/dev/null || true)
+  # `git log` also exits 0 with empty output in a repo with no commits, and an empty
+  # SOURCE_DATE_EPOCH makes setuptools fail outright — so test the value, not just the exit code.
+  [[ -n "$SOURCE_DATE_EPOCH" ]] || SOURCE_DATE_EPOCH=1577836800
+  export SOURCE_DATE_EPOCH
   if "$PYTHON_BIN" -c "import build" >/dev/null 2>&1; then
     # Preferred: `python -m build` produces an sdist (.tar.gz) and a wheel (.whl) in --outdir.
     (cd "$PKG_DIR" && "$PYTHON_BIN" -m build --outdir "$DEST") || \
