@@ -309,6 +309,10 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 			const FBox InstanceScaledLocalBounds(Instance.LocalBounds.Min * ActorScale, Instance.LocalBounds.Max * ActorScale);
 			SetProtoBox(*InstanceBoundsProto->mutable_local_bounds(), InstanceScaledLocalBounds);
 			SetProtoTransform(*InstanceBoundsProto->mutable_transform(), Instance.Transform.GetTranslation() * ActorScale, Instance.Transform.Rotator());
+			if (!Instance.Tag.IsEmpty())
+			{
+				InstanceBoundsProto->set_tag(TCHAR_TO_UTF8(*Instance.Tag));
+			}
 		}
 	}
 

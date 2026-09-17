@@ -234,8 +234,6 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 	}
 
 	FTransform SpawnTransform = ToUnrealTransform(Request.transform());
-	FVector SpawnLocation = SpawnTransform.GetLocation();
-	FRotator SpawnRotation = SpawnTransform.GetRotation().Rotator();
 
 	if (!Request.relative_to_actor().empty())
 	{
@@ -248,20 +246,37 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 			return;
 		}
 		SpawnTransform = SpawnTransform * RelativeToActor->GetActorTransform();
-		SpawnLocation = SpawnTransform.GetLocation();
-		SpawnRotation = SpawnTransform.GetRotation().Rotator();
 	}
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-	const AActor* SpawnedActor = Request.deferred()
-		? World->SpawnActorDeferred<AActor>(Class, SpawnTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn)
-		: World->SpawnActor(Class, &SpawnLocation, &SpawnRotation, SpawnParameters);
+	SpawnParameters.bDeferConstruction = Request.deferred();
+
+	const bool bNameRequested = !Request.name().empty();
+	if (bNameRequested)
+	{
+		const FString RequestedName(UTF8_TO_TCHAR(Request.name().c_str()));
+		if (RequestedName.Contains(TEXT(".")) || RequestedName.Contains(TEXT(":")))
+		{
+			const FString ErrorMsg = FString::Printf(TEXT("SpawnActor request name '%s' is invalid: '.' and ':' are object-path separators and are not allowed in a spawned actor name"), *RequestedName);
+			ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(grpc::INVALID_ARGUMENT, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
+			return;
+		}
+		SpawnParameters.Name = FName(*RequestedName);
+		// Fail loudly on collision rather than the enum's default (Required_Fatal, which asserts) or
+		// silently suffixing (Requested) -- genesis is the source of truth for the name it asked for.
+		SpawnParameters.NameMode = FActorSpawnParameters::ESpawnActorNameMode::Required_ErrorAndReturnNull;
+	}
+
+	const AActor* SpawnedActor = World->SpawnActor(Class, &SpawnTransform, SpawnParameters);
 
 	if (!SpawnedActor)
 	{
-		const FString ErrorMsg = FString::Printf(TEXT("Failed to spawn actor of type '%s' at location (%f, %f, %f)"), *ActorTypeName, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
-		ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(grpc::ABORTED, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
+		const FVector SpawnLocation = SpawnTransform.GetLocation();
+		const FString ErrorMsg = bNameRequested
+			? FString::Printf(TEXT("Failed to spawn actor of type '%s': requested name '%s' is already in use"), *ActorTypeName, UTF8_TO_TCHAR(Request.name().c_str()))
+			: FString::Printf(TEXT("Failed to spawn actor of type '%s' at location (%f, %f, %f)"), *ActorTypeName, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
+		ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(bNameRequested ? grpc::ALREADY_EXISTS : grpc::ABORTED, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 		return;
 	}
 
@@ -2601,14 +2616,118 @@ void UTempoWorldControlServiceSubsystem::CallObjectFunction(const CallFunctionRe
 		return;
 	}
 
-	if (Function->NumParms != 0)
+	// Collect the function's in-parameters (declaration order), rejecting anything this simple
+	// string-args scheme can't express: a return value, or a true out/reference parameter (a
+	// const-reference in-param is fine -- CPF_ConstParm without CPF_OutParm is how UHT marks
+	// those -- only a genuine out/non-const-ref param is unsupported here).
+	TArray<FProperty*> InParams;
+	for (TFieldIterator<FProperty> It(Function); It; ++It)
 	{
-		const FString ErrorMsg = FString::Printf(TEXT("Function '%s' on object '%s' has %d parameters, but only functions with no arguments and void return type are currently supported"), *FunctionName.ToString(), *Object->GetName(), Function->NumParms);
+		FProperty* Prop = *It;
+		if (!Prop->HasAnyPropertyFlags(CPF_Parm))
+		{
+			continue;
+		}
+		if (Prop->HasAnyPropertyFlags(CPF_ReturnParm))
+		{
+			const FString ErrorMsg = FString::Printf(TEXT("Function '%s' on object '%s' has a return value, which is not currently supported"), *FunctionName.ToString(), *Object->GetName());
+			ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
+			return;
+		}
+		if (Prop->HasAnyPropertyFlags(CPF_OutParm) && !Prop->HasAnyPropertyFlags(CPF_ConstParm))
+		{
+			const FString ErrorMsg = FString::Printf(TEXT("Parameter '%s' of function '%s' on object '%s' is an out/reference parameter, which is not currently supported"), *Prop->GetName(), *FunctionName.ToString(), *Object->GetName());
+			ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
+			return;
+		}
+		InParams.Add(Prop);
+	}
+
+	if (InParams.Num() != Request.args_size())
+	{
+		const FString ErrorMsg = FString::Printf(TEXT("Function '%s' on object '%s' takes %d parameter(s), but %d arg(s) were provided"), *FunctionName.ToString(), *Object->GetName(), InParams.Num(), Request.args_size());
 		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 		return;
 	}
 
-	Object->ProcessEvent(Function, nullptr);
+	// Function->ParmsSize covers only the CPF_Parm properties (params + return value), not the
+	// object's own members, so a plain zeroed byte buffer sized to it is exactly what ProcessEvent
+	// expects as its Parms pointer -- same shape UFunction::Invoke uses internally.
+	TArray<uint8> ParamsBuffer;
+	ParamsBuffer.SetNumZeroed(Function->ParmsSize);
+	for (FProperty* Prop : InParams)
+	{
+		Prop->InitializeValue_InContainer(ParamsBuffer.GetData());
+	}
+
+	FString ConversionError;
+	for (int32 ArgIndex = 0; ArgIndex < InParams.Num(); ++ArgIndex)
+	{
+		FProperty* Prop = InParams[ArgIndex];
+		const FString ArgStr(UTF8_TO_TCHAR(Request.args(ArgIndex).c_str()));
+		void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(ParamsBuffer.GetData());
+
+		if (FBoolProperty* BoolProperty = CastField<FBoolProperty>(Prop))
+		{
+			BoolProperty->SetPropertyValue(ValuePtr, ArgStr.ToBool());
+		}
+		else if (FIntProperty* IntProperty = CastField<FIntProperty>(Prop))
+		{
+			IntProperty->SetPropertyValue(ValuePtr, FCString::Atoi(*ArgStr));
+		}
+		else if (FInt64Property* Int64Property = CastField<FInt64Property>(Prop))
+		{
+			Int64Property->SetPropertyValue(ValuePtr, FCString::Atoi64(*ArgStr));
+		}
+		else if (FFloatProperty* FloatProperty = CastField<FFloatProperty>(Prop))
+		{
+			FloatProperty->SetPropertyValue(ValuePtr, FCString::Atof(*ArgStr));
+		}
+		else if (FDoubleProperty* DoubleProperty = CastField<FDoubleProperty>(Prop))
+		{
+			DoubleProperty->SetPropertyValue(ValuePtr, FCString::Atod(*ArgStr));
+		}
+		else if (FStrProperty* StrProperty = CastField<FStrProperty>(Prop))
+		{
+			StrProperty->SetPropertyValue(ValuePtr, ArgStr);
+		}
+		else if (FNameProperty* NameProperty = CastField<FNameProperty>(Prop))
+		{
+			NameProperty->SetPropertyValue(ValuePtr, FName(*ArgStr));
+		}
+		else if (FEnumProperty* EnumProperty = CastField<FEnumProperty>(Prop))
+		{
+			const int64 EnumValue = GetEnumValueByAuthoredName(EnumProperty->GetEnum(), ArgStr);
+			if (EnumValue == INDEX_NONE)
+			{
+				ConversionError = FString::Printf(TEXT("Invalid value '%s' for enum parameter '%s' (enum '%s') of function '%s'"), *ArgStr, *Prop->GetName(), *EnumProperty->GetEnum()->GetName(), *FunctionName.ToString());
+				break;
+			}
+			EnumProperty->GetUnderlyingProperty()->SetIntPropertyValue(ValuePtr, EnumValue);
+		}
+		else
+		{
+			ConversionError = FString::Printf(TEXT("Parameter '%s' of function '%s' on object '%s' has type '%s', which is not a supported CallFunction argument type"), *Prop->GetName(), *FunctionName.ToString(), *Object->GetName(), *Prop->GetCPPType());
+			break;
+		}
+	}
+
+	if (!ConversionError.IsEmpty())
+	{
+		for (FProperty* Prop : InParams)
+		{
+			Prop->DestroyValue_InContainer(ParamsBuffer.GetData());
+		}
+		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::INVALID_ARGUMENT, std::string(TCHAR_TO_UTF8(*ConversionError))));
+		return;
+	}
+
+	Object->ProcessEvent(Function, ParamsBuffer.GetData());
+
+	for (FProperty* Prop : InParams)
+	{
+		Prop->DestroyValue_InContainer(ParamsBuffer.GetData());
+	}
 
 	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
 }

@@ -32,6 +32,20 @@ public:
 		EditCondition = "bReportSegmentedSplineMeshBounds", EditConditionHides))
 	float ChordToleranceCm = 5.0f;
 
+	// See ITempoSegmentedSplineMeshBoundsInterface::GetSegmentedSplineMeshBoundsTargetCuboidsPerMeter.
+	// On by default (0.5); 0 disables it.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tempo",
+		meta = (ClampMin = "0.0", EditCondition = "bReportSegmentedSplineMeshBounds", EditConditionHides))
+	float TargetCuboidsPerMeter = 0.5f;
+
+	// See ITempoSegmentedSplineMeshBoundsInterface::GetSegmentedSplineMeshBoundsMaxCuboidLengthCm.
+	// On by default (2000cm / 20m); <= 0 disables it.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tempo", meta = (Units = "Centimeters",
+		EditCondition = "bReportSegmentedSplineMeshBounds", EditConditionHides))
+	float MaxCuboidLengthCm = 2000.0f;
+
 	virtual bool ShouldReportSegmentedSplineMeshBounds() const override { return bReportSegmentedSplineMeshBounds; }
 	virtual float GetSegmentedSplineMeshBoundsChordToleranceCm() const override { return ChordToleranceCm; }
+	virtual float GetSegmentedSplineMeshBoundsTargetCuboidsPerMeter() const override { return TargetCuboidsPerMeter; }
+	virtual float GetSegmentedSplineMeshBoundsMaxCuboidLengthCm() const override { return MaxCuboidLengthCm; }
 };

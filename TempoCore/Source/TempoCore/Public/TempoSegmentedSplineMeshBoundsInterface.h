@@ -40,4 +40,37 @@ public:
 	// more, tighter-fitting boxes. If several implementers on the same Actor disagree, the smallest
 	// (finest) value wins, matching ITempoBoundsHeightClampInterface's min-wins rule.
 	virtual float GetSegmentedSplineMeshBoundsChordToleranceCm() const = 0;
+
+	// Target sub-segment DENSITY (cuboids per meter of the mesh's own undeformed domain length,
+	// interpreted the same way as the ChordToleranceCm-driven subdivision's own length terms -- see
+	// AppendSplineMeshSegmentBounds) that the bend-dependent (chord/roll/twist error) subdivision above
+	// is driven toward, in WHICHEVER direction is needed -- this is a target to LAND CLOSE TO, not a
+	// floor: if the bend-driven result already has fewer sub-segments than the target implies, more are
+	// added (splitting the currently-largest one first, repeatedly); if it already has MORE than the
+	// target implies (e.g. a tightly bent run whose own chord tolerance alone demanded a fine
+	// subdivision), it is COARSENED back down toward the target too (repeatedly merging whichever
+	// adjacent pair would produce the smallest combined length -- i.e. undoing the least-impactful
+	// split first). On by default (0.5/meter); 0 disables this entirely, leaving the bend-driven result
+	// exactly as ChordToleranceCm alone produced it, in either direction. Useful for e.g. an obstacle
+	// consumer that wants a roughly PREDICTABLE spatial resolution along a whole spline -- both a
+	// guaranteed minimum along a dead-straight run chord tolerance alone wouldn't subdivide much, and a
+	// bound on how fine a tightly bent run's own chord tolerance would otherwise make it. A straight
+	// run's own reliability floor (see MinSubSegmentsForStraightRuns in AppendSplineMeshSegmentBounds)
+	// is never coarsened below, regardless of this setting. If several implementers on the same Actor
+	// disagree, the LARGEST (most demanding, i.e. denser) target wins.
+	virtual float GetSegmentedSplineMeshBoundsTargetCuboidsPerMeter() const { return 0.5f; }
+
+	// Hard cap (cm) on any single reported sub-segment's length -- independent of, and enforced on top
+	// of, both the chord-tolerance pass and the TargetCuboidsPerMeter top-up above: whichever of those
+	// two would otherwise leave a sub-segment longer than this is split further (always bisecting the
+	// currently-largest sub-segment, same as the density top-up) until every sub-segment is at or under
+	// this length. On by default (2000cm / 20m) -- a very long, dead-straight run would otherwise still
+	// produce a handful of very long boxes even with a sensible chord tolerance and density target, if
+	// neither of those ever demanded a split that far apart. <= 0 disables this cap. Subject to the
+	// same MaxSubSegments hard ceiling as the rest of this subdivision (see AppendSplineMeshSegmentBounds)
+	// -- an extremely long component may still exceed this length per sub-segment once that ceiling is
+	// hit; this is an accepted trade-off, not a bug, matching the existing safety-valve philosophy. If
+	// several implementers on the same Actor disagree, the SMALLEST (most restrictive) value wins,
+	// matching ChordToleranceCm's min-wins rule.
+	virtual float GetSegmentedSplineMeshBoundsMaxCuboidLengthCm() const { return 2000.0f; }
 };

@@ -25,6 +25,12 @@ struct FTempoInstanceBounds
 	// relative to the Actor.
 	UPROPERTY(BlueprintReadOnly, Category = "TempoCoreUtils")
 	FTransform Transform = FTransform::Identity;
+
+	// Optional semantic label for this instance, from the source component's
+	// ITempoInstanceBoundsTagInterface implementer (if any). Empty means "no tag" -- a caller falls
+	// back to whatever labeling it already does (e.g. class/name-based). See that interface.
+	UPROPERTY(BlueprintReadOnly, Category = "TempoCoreUtils")
+	FString Tag;
 };
 
 UCLASS()
@@ -94,15 +100,22 @@ public:
 	// rotated), and each Transform (location + rotation, no scale) places it relative to Actor.
 	// Subdivides until every sub-segment's chord stays within ChordToleranceCm of the mesh's true
 	// centreline (roll twist and cross-section scale drift are folded into the same cm budget, since
-	// both produce box error at zero centreline deviation). Reads the STATIC MESH's own BodySetup,
-	// never the component's own (SplineMeshComponent::RecreateCollision mutates the LATTER into
+	// both produce box error at zero centreline deviation), THEN drives that result toward
+	// TargetCuboidsPerMeter from EITHER direction (splitting the currently-largest sub-segment if under
+	// the target, or merging the smallest adjacent pair if over it), and finally tops that up further
+	// (additive only) so every sub-segment is at or under MaxCuboidLengthCm (either <= 0 disables the
+	// corresponding step; see
+	// ITempoSegmentedSplineMeshBoundsInterface::GetSegmentedSplineMeshBoundsTargetCuboidsPerMeter /
+	// ::GetSegmentedSplineMeshBoundsMaxCuboidLengthCm). Reads the STATIC MESH's own BodySetup, never
+	// the component's own (SplineMeshComponent::RecreateCollision mutates the LATTER into
 	// already-deformed geometry -- reading it here would deform twice); falls back to the mesh's
 	// render bounds when that BodySetup has no collision elements (e.g. CTF_UseComplexAsSimple, whose
 	// AggGeom RecreateCollision empties outright), so a mesh that would otherwise report NO box still
 	// gets one. Appends nothing (leaving the caller to fall back to a single generic box) only if
 	// SplineMeshComponent has no static mesh or no resolvable cross-section at all.
 	static void AppendSplineMeshSegmentBounds(const USplineMeshComponent* SplineMeshComponent, const AActor* Actor,
-		float ChordToleranceCm, const TOptional<float>& MaxRelevantHeight, TArray<FTempoInstanceBounds>& OutInstanceBounds);
+		float ChordToleranceCm, float TargetCuboidsPerMeter, float MaxCuboidLengthCm,
+		const TOptional<float>& MaxRelevantHeight, const FString& Tag, TArray<FTempoInstanceBounds>& OutInstanceBounds);
 
 	// Returns a stable, round-trippable name for an actor, suitable for handing to an external
 	// client and using later to look the same actor back up (e.g. via GetActorWithName).
