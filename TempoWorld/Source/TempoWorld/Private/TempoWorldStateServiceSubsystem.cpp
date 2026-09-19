@@ -218,7 +218,19 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 	ActorStateRotation->set_p(ActorRotation.Pitch);
 	ActorStateRotation->set_y(ActorRotation.Yaw);
 
-	const FVector ActorLinearVelocity = QuantityConverter<CM2M, L2R>::Convert(Actor->GetVelocity());
+	// APawn::GetVelocity() reads its movement component, not ComponentVelocity, unless the root
+	// simulates physics. Mass-driven Pawns with no movement component (the LowRes cyclist/scooter
+	// Blueprints) therefore report zero even though MassTraffic publishes a real velocity to the
+	// root's ComponentVelocity. Fall back to that rather than recording a moving actor as stopped.
+	FVector RawActorLinearVelocity = Actor->GetVelocity();
+	if (RawActorLinearVelocity.IsNearlyZero())
+	{
+		if (const USceneComponent* ActorRootComponent = Actor->GetRootComponent())
+		{
+			RawActorLinearVelocity = ActorRootComponent->GetComponentVelocity();
+		}
+	}
+	const FVector ActorLinearVelocity = QuantityConverter<CM2M, L2R>::Convert(RawActorLinearVelocity);
 	TempoCore::Twist* ActorStateVelocity = ActorState.mutable_velocity();
 	TempoCore::Vector* ActorStateLinearVel = ActorStateVelocity->mutable_linear();
 	ActorStateLinearVel->set_x(ActorLinearVelocity.X);
