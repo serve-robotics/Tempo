@@ -78,6 +78,11 @@ public:
 	// this lets each sub-object still report a distinguishable, correctly-oriented bounds. Empty for
 	// Actors with no primitive components.
 	//
+	// SPECIAL CASE: an Actor (or component) implementing ITempoCustomInstanceBoundsInterface is given
+	// the chance to fully own the decomposition of ALL its USplineMeshComponents at once, batched --
+	// if it takes it, the per-component SplineMeshComponent case below (segmented or not) never runs
+	// for that Actor; InstancedStaticMesh and everything else is unaffected. See that interface's own
+	// doc comment.
 	// SPECIAL CASE: an Actor with a movement CapsuleComponent (every ACharacter, including every
 	// pedestrian) always returns exactly one entry derived from the capsule's own shape and oriented to
 	// the capsule's own rotation, regardless of how many skeletal mesh sub-components it has -- a

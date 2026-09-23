@@ -2,13 +2,22 @@
 
 """Ground-truth world logger.
 
-Streams actor states near the tracked (ego) actor and logs each as an oriented
-3D box plus a transform. All values come straight from ActorState in the
-right-handed proto frame.
+Streams actor states near the tracked (ego) actor and logs each as one or more
+oriented 3D boxes plus a transform. All values come straight from ActorState in
+the right-handed proto frame.
 
-The oriented box is built from ``local_bounds`` (an axis-aligned box in the
-actor's local frame, with scale baked in) placed by the actor's world
-``transform`` via the entity's Transform3D — so no per-box rotation is needed.
+Each box is built from a local_bounds (an axis-aligned box in its own local
+frame, with scale baked in) placed by a world Transform3D — so no per-box
+rotation is needed, Rerun's entity-hierarchy transform composition does it.
+
+If ActorState.instance_bounds is non-empty (an Actor decomposed into several
+per-instance/per-segment boxes -- see UTempoCoreUtils::GetActorLocalInstanceBounds,
+e.g. a spline prop line's cuboid-per-run-segment decomposition), each entry is
+logged as its OWN child entity with its OWN (Actor-relative) transform, which
+Rerun composes with the parent Actor entity's world transform automatically --
+so the whole decomposition is visible, not just the Actor's single overall
+local_bounds. Falls back to the single local_bounds box (the original
+behavior) for the many Actors that don't decompose at all.
 """
 
 import rerun as rr
@@ -22,8 +31,18 @@ from ..streaming import pump
 
 def _log_actor_state(state):
     entity = conv.ground_truth_entity(state.name)
-    center, half = conv.box_center_half(state.local_bounds)
     rr.log(entity, conv.transform_to_rerun(state.transform))
+
+    if state.instance_bounds:
+        for index, instance in enumerate(state.instance_bounds):
+            instance_entity = f"{entity}/instance_{index}"
+            center, half = conv.box_center_half(instance.local_bounds)
+            label = instance.tag if instance.tag else state.name
+            rr.log(instance_entity, conv.transform_to_rerun(instance.transform))
+            rr.log(instance_entity, rr.Boxes3D(centers=[center], half_sizes=[half], labels=[label]))
+        return
+
+    center, half = conv.box_center_half(state.local_bounds)
     rr.log(entity, rr.Boxes3D(centers=[center], half_sizes=[half], labels=[state.name]))
 
 
