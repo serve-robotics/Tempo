@@ -3,6 +3,7 @@
 #include "TempoCoreUtils.h"
 
 #include "TempoBoundsHeightClampInterface.h"
+#include "TempoCustomInstanceBoundsInterface.h"
 #include "TempoInstanceBoundsFilterInterface.h"
 #include "TempoInstanceBoundsTagInterface.h"
 #include "TempoSegmentedSplineMeshBoundsInterface.h"
@@ -785,6 +786,30 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 
 	TArray<FTempoInstanceBounds> InstanceBounds;
 
+	// Gives an Actor a chance to fully own the decomposition of ALL its USplineMeshComponents at
+	// once, batched -- see ITempoCustomInstanceBoundsInterface. Gated on BoundsFilter.bReportSplineMeshBounds
+	// up front, same as the generic per-component branch below would be, so a caller that's turned
+	// SplineMesh reporting off entirely never even asks. If taken, every USplineMeshComponent is
+	// skipped in the loop below; InstancedStaticMesh (and everything else) is unaffected.
+	bool bCustomSplineMeshBoundsHandled = false;
+	if (BoundsFilter.bReportSplineMeshBounds)
+	{
+		for (const ITempoCustomInstanceBoundsInterface* Reporter :
+			FindBoundsInterfaceImplementers<UTempoCustomInstanceBoundsInterface, ITempoCustomInstanceBoundsInterface>(Actor))
+		{
+			const int32 CountBefore = InstanceBounds.Num();
+			if (Reporter->GetCustomSplineMeshInstanceBounds(InstanceBounds))
+			{
+				bCustomSplineMeshBoundsHandled = true;
+				for (int32 Index = CountBefore; Index < InstanceBounds.Num(); ++Index)
+				{
+					ClampBoxHeight(InstanceBounds[Index].LocalBounds, MaxRelevantHeight);
+				}
+				break;
+			}
+		}
+	}
+
 	// Computes Placement's box in ITS OWN local frame (scale baked in, but NOT rotated by Placement's
 	// own rotation) plus the location+rotation needed to place and orient it relative to Actor --
 	// mirroring ActorState's local_bounds + transform, just per-instance, so a rotated instance is
@@ -870,6 +895,14 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 			// single-box fallback below), since it still renders and the Actor has explicitly said
 			// this category shouldn't count as its own obstacle geometry.
 			if (!BoundsFilter.bReportSplineMeshBounds)
+			{
+				continue;
+			}
+
+			// Already fully handled by the batched ITempoCustomInstanceBoundsInterface pass above --
+			// see its own comment. Every USplineMeshComponent is skipped here in that case, regardless
+			// of which component this is; the implementer owns ALL of them together, not one at a time.
+			if (bCustomSplineMeshBoundsHandled)
 			{
 				continue;
 			}
