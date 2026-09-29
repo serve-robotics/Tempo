@@ -200,6 +200,36 @@ void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceActivated()
 
 void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceDeactivated()
 {
+	// Another instance deactivated (a peer relinquishing, or its world being destroyed mid-travel).
+	// An Editor-world instance must NOT grab activation away from a live Game/PIE world's own
+	// instance here -- doing so unconditionally raced with an OpenLevel triggered WHILE already in
+	// PIE (e.g. genesis's per-episode load_level RPC): the OLD PIE world's Deinitialize() removes
+	// itself as a listener, deactivates whichever instance is currently active, THEN broadcasts
+	// Deactivated -- and since the Editor's own persistent-level instance is alive the whole time
+	// PIE runs (PIE never destroys the Editor world), it would reactivate itself as the active
+	// WorldControlService handler in the gap before the NEW PIE world's Initialize() runs and
+	// explicitly re-activates itself. Any SpawnActor/FinishSpawningActor request pair straddling
+	// that gap then silently landed on two different instances: the actor was found by name in
+	// FinishSpawningActor (GetActorWithName searches whichever world is currently active, and by
+	// then that's back to the correct PIE world), but its DeferredSpawnTransforms entry lived on
+	// the Editor instance that briefly (and wrongly) handled SpawnActor -- producing "No deferred
+	// spawn transform recorded" for a perfectly valid deferred spawn, 100% of the time (SplinePropLine
+	// is the only actor type using this deferred spawn/finish RPC pair). See AUT-3194.
+	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor)
+	{
+		for (TObjectIterator<UTempoWorldControlServiceSubsystem> It; It; ++It)
+		{
+			const UTempoWorldControlServiceSubsystem* Other = *It;
+			if (Other != this && IsValid(Other) && Other->GetWorld() &&
+				(Other->GetWorld()->WorldType == EWorldType::PIE || Other->GetWorld()->WorldType == EWorldType::Game))
+			{
+				// A Game/PIE world instance is still alive (even if mid-teardown) -- let it, or its
+				// replacement's own Initialize(), be the one to (re)activate. Don't steal.
+				return;
+			}
+		}
+	}
+
 	// Another service was Deactivated. Take over for it.
 	FTempoServer::Get().ActivateService<WorldControlService>(this);
 }
