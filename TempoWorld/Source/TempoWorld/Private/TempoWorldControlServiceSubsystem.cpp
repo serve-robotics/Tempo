@@ -2,6 +2,7 @@
 
 #include "TempoWorldControlServiceSubsystem.h"
 
+#include "TempoWorld.h"
 #include "TempoWorld/WorldControl.grpc.pb.h"
 
 #include "TempoConversion.h"
@@ -173,16 +174,23 @@ void UTempoWorldControlServiceSubsystem::Initialize(FSubsystemCollectionBase& Co
 {
 	Super::Initialize(Collection);
 
+	UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: Initialize %p World=%s WorldType=%d"),
+		this, GetWorld() ? *GetWorld()->GetName() : TEXT("null"), GetWorld() ? (int32)GetWorld()->WorldType : -1);
+
 	TempoWorldControlServiceActivated.Broadcast();
 	TempoWorldControlServiceActivated.AddUObject(this, &UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceActivated);
 	TempoWorldControlServiceDeactivated.AddUObject(this, &UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceDeactivated);
 
 	FTempoServer::Get().ActivateService<WorldControlService>(this);
+	UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: Initialize %p explicitly activated self"), this);
 }
 
 void UTempoWorldControlServiceSubsystem::Deinitialize()
 {
 	Super::Deinitialize();
+
+	UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: Deinitialize %p World=%s WorldType=%d"),
+		this, GetWorld() ? *GetWorld()->GetName() : TEXT("null"), GetWorld() ? (int32)GetWorld()->WorldType : -1);
 
 	TempoWorldControlServiceActivated.RemoveAll(this);
 	TempoWorldControlServiceDeactivated.RemoveAll(this);
@@ -194,6 +202,7 @@ void UTempoWorldControlServiceSubsystem::Deinitialize()
 
 void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceActivated()
 {
+	UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: %p OnActivated (peer took over) -- deactivating self"), this);
 	// Another service was activated. Let it take over.
 	FTempoServer::Get().DeactivateService<WorldControlService>();
 }
@@ -223,6 +232,7 @@ void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceDeactivated()
 			if (Other != this && IsValid(Other) && Other->GetWorld() &&
 				(Other->GetWorld()->WorldType == EWorldType::PIE || Other->GetWorld()->WorldType == EWorldType::Game))
 			{
+				UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: %p (Editor) declined take-over -- live Game/PIE instance %p still exists"), this, Other);
 				// A Game/PIE world instance is still alive (even if mid-teardown) -- let it, or its
 				// replacement's own Initialize(), be the one to (re)activate. Don't steal.
 				return;
@@ -230,6 +240,8 @@ void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceDeactivated()
 		}
 	}
 
+	UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: %p OnDeactivated -- taking over (World=%s WorldType=%d)"),
+		this, GetWorld() ? *GetWorld()->GetName() : TEXT("null"), GetWorld() ? (int32)GetWorld()->WorldType : -1);
 	// Another service was Deactivated. Take over for it.
 	FTempoServer::Get().ActivateService<WorldControlService>(this);
 }
@@ -313,10 +325,20 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 	if (Request.deferred())
 	{
 		DeferredSpawnTransforms.Add(SpawnedActor, SpawnTransform);
+		UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: SpawnActor(deferred) on %p World=%s WorldType=%d FName=%s Label=%s (%p) DeferredSpawnTransforms.Num()=%d"),
+			this, GetWorld() ? *GetWorld()->GetName() : TEXT("null"), GetWorld() ? (int32)GetWorld()->WorldType : -1,
+			*SpawnedActor->GetFName().ToString(), *UTempoCoreUtils::GetActorIdentifier(SpawnedActor), SpawnedActor, DeferredSpawnTransforms.Num());
 	}
 
 	SpawnActorResponse Response;
-	Response.set_name(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(SpawnedActor)));
+	// When a name was requested, echo back exactly that -- guaranteed to be the actor's real FName
+	// (NameMode=Required_ErrorAndReturnNull above means the spawn either used this exact name or
+	// failed outright, never silently suffixed). GetActorIdentifier() (the editor label) is NOT a
+	// safe substitute here: it's derived from the class name, not the requested FName, so two
+	// actors of the same class spawned with different literal names can still materialize the
+	// IDENTICAL label -- which previously made this response name useless for telling them apart in
+	// a later FinishSpawningActor/CallFunction/etc. call (see GetActorWithName's own comment; AUT-3194).
+	Response.set_name(bNameRequested ? Request.name() : std::string(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(SpawnedActor))));
 	*Response.mutable_transform() = FromUnrealTransform(SpawnedActor->GetActorTransform());
 
 	ResponseContinuation.ExecuteIfBound(Response, grpc::Status_OK);
@@ -332,6 +354,9 @@ void UTempoWorldControlServiceSubsystem::FinishSpawningActor(const FinishSpawnin
 
 	const FString ActorName(UTF8_TO_TCHAR(Request.actor().c_str()));
 	AActor* Actor = GetActorWithName(GetWorld(), ActorName);
+	UE_LOG(LogTempoWorld, Warning, TEXT("AUT-3194 diag: FinishSpawningActor on %p World=%s WorldType=%d requested=%s found FName=%s Label=%s (%p) DeferredSpawnTransforms.Num()=%d"),
+		this, GetWorld() ? *GetWorld()->GetName() : TEXT("null"), GetWorld() ? (int32)GetWorld()->WorldType : -1,
+		*ActorName, Actor ? *Actor->GetFName().ToString() : TEXT("null"), Actor ? *UTempoCoreUtils::GetActorIdentifier(Actor) : TEXT("null"), Actor, DeferredSpawnTransforms.Num());
 	if (!Actor)
 	{
 		const FString ErrorMsg = FString::Printf(TEXT("Failed to find actor '%s' for FinishSpawningActor request"), *ActorName);
