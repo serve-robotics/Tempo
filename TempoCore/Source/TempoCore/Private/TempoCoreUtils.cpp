@@ -891,7 +891,7 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 	// reported as an oriented box rather than an Actor-axis-aligned one. Clamping happens on the
 	// UN-rotated local box, where the box's own Min.Z is still that instance's own base, so the clamp
 	// is unaffected by whatever rotation the instance carries.
-	auto AddInstanceBounds = [&InstanceBounds, &MaxRelevantHeight, bExportPrimitives](const FKAggregateGeom& AggGeom, const FTransform& Placement, const FString& Tag)
+	auto AddInstanceBounds = [&InstanceBounds, &MaxRelevantHeight, bExportPrimitives](const FKAggregateGeom& AggGeom, const FTransform& Placement, const FString& Tag, bool bAllowPrimitives = true)
 	{
 		FBoxSphereBounds Bounds;
 		AggGeom.CalcBoxSphereBounds(Bounds, FTransform(FQuat::Identity, FVector::ZeroVector, Placement.GetScale3D()));
@@ -908,7 +908,7 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		Entry.Transform = FTransform(Placement.GetRotation(), Placement.GetTranslation());
 		Entry.Tag = Tag;
 		// A clamped box is no longer the bounds of the primitives, so a clamped instance stays a box.
-		if (bExportPrimitives && LocalBox == UnclampedBox)
+		if (bExportPrimitives && bAllowPrimitives && LocalBox == UnclampedBox)
 		{
 			AppendCollisionPrimitives(AggGeom, Placement.GetScale3D(), Entry.Primitives);
 		}
@@ -1035,8 +1035,10 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		}
 		else if (const UBodySetup* BodySetup = PrimitiveComponent->BodyInstance.GetBodySetup())
 		{
+			// A USplineMeshComponent only reaches here when segmentation resolved nothing, and its BodySetup is
+			// DEFORMED geometry, so it never reports primitives -- just its box.
 			AddInstanceBounds(BodySetup->AggGeom, PrimitiveComponent->GetComponentTransform().GetRelativeTransform(Actor->GetTransform()),
-				ResolveInstanceBoundsTag(Actor, PrimitiveComponent));
+				ResolveInstanceBoundsTag(Actor, PrimitiveComponent), !PrimitiveComponent->IsA<USplineMeshComponent>());
 		}
 	}
 
