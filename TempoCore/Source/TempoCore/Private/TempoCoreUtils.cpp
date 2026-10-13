@@ -112,6 +112,67 @@ namespace
 		return MaxRelevantHeight;
 	}
 
+	UTempoCoreUtils::FCollisionPrimitiveExportPredicate GCollisionPrimitiveExportPredicate;
+
+	// Appends AggGeom's simple-collision elements as primitives in the instance frame (scale baked in).
+	// Scale is the instance's placement scale. Appends nothing, returning false, when AggGeom holds any
+	// element kind we don't report (tapered capsule, level set, an empty convex), so an instance is
+	// never described by only part of its collision.
+	bool AppendCollisionPrimitives(const FKAggregateGeom& AggGeom, const FVector& Scale, TArray<FTempoCollisionPrimitive>& OutPrimitives)
+	{
+		int32 NumSupported = AggGeom.BoxElems.Num() + AggGeom.SphereElems.Num() + AggGeom.SphylElems.Num();
+		for (const FKConvexElem& Convex : AggGeom.ConvexElems)
+		{
+			NumSupported += Convex.VertexData.IsEmpty() ? 0 : 1;
+		}
+		if (NumSupported == 0 || NumSupported != AggGeom.GetElementCount())
+		{
+			return false;
+		}
+
+		const FVector AbsScale = Scale.GetAbs();
+
+		for (const FKBoxElem& Box : AggGeom.BoxElems)
+		{
+			FTempoCollisionPrimitive& Primitive = OutPrimitives.AddDefaulted_GetRef();
+			Primitive.Type = FTempoCollisionPrimitive::EType::Box;
+			Primitive.Transform = FTransform(Box.Rotation, Box.Center * Scale);
+			Primitive.HalfExtent = FVector(Box.X, Box.Y, Box.Z) * 0.5 * AbsScale;
+		}
+		for (const FKSphereElem& Sphere : AggGeom.SphereElems)
+		{
+			FTempoCollisionPrimitive& Primitive = OutPrimitives.AddDefaulted_GetRef();
+			Primitive.Type = FTempoCollisionPrimitive::EType::Sphere;
+			Primitive.Transform = FTransform(FQuat::Identity, Sphere.Center * Scale);
+			Primitive.Radius = Sphere.Radius * AbsScale.GetMin();
+		}
+		for (const FKSphylElem& Sphyl : AggGeom.SphylElems)
+		{
+			FTempoCollisionPrimitive& Primitive = OutPrimitives.AddDefaulted_GetRef();
+			Primitive.Type = FTempoCollisionPrimitive::EType::Capsule;
+			Primitive.Transform = FTransform(Sphyl.Rotation, Sphyl.Center * Scale);
+			Primitive.Radius = Sphyl.GetScaledRadius(Scale);
+			Primitive.HalfLength = Sphyl.GetScaledCylinderLength(Scale) * 0.5;
+		}
+		for (const FKConvexElem& Convex : AggGeom.ConvexElems)
+		{
+			if (Convex.VertexData.IsEmpty())
+			{
+				continue;
+			}
+			FTempoCollisionPrimitive& Primitive = OutPrimitives.AddDefaulted_GetRef();
+			Primitive.Type = FTempoCollisionPrimitive::EType::Convex;
+			const FTransform ElemTransform = Convex.GetTransform();
+			Primitive.Vertices.Reserve(Convex.VertexData.Num());
+			for (const FVector& Vertex : Convex.VertexData)
+			{
+				Primitive.Vertices.Add(ElemTransform.TransformPosition(Vertex) * Scale);
+			}
+			Primitive.Indices = Convex.GetChaosConvexIndices();
+		}
+		return true;
+	}
+
 	void ClampBoxHeight(FBox& Box, const TOptional<float>& MaxRelevantHeight)
 	{
 		if (MaxRelevantHeight.IsSet() && Box.IsValid)
@@ -733,9 +794,15 @@ void UTempoCoreUtils::AppendSplineMeshSegmentBounds(const USplineMeshComponent* 
 	}
 }
 
+void UTempoCoreUtils::SetCollisionPrimitiveExportPredicate(FCollisionPrimitiveExportPredicate Predicate)
+{
+	GCollisionPrimitiveExportPredicate = MoveTemp(Predicate);
+}
+
 TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const AActor* Actor, bool bIncludeHiddenComponents)
 {
 	const TOptional<float> MaxRelevantHeight = FindMaxRelevantBoundsHeight(Actor);
+	const bool bExportPrimitives = GCollisionPrimitiveExportPredicate && GCollisionPrimitiveExportPredicate(Actor);
 	const FInstanceBoundsFilterSettings BoundsFilter = ResolveInstanceBoundsFilterSettings(Actor);
 
 	// An Actor with a movement CapsuleComponent (every ACharacter, including every pedestrian) is
@@ -753,11 +820,19 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		const float HalfHeight = CapsuleComponent->GetScaledCapsuleHalfHeight();
 
 		FBox LocalBox(FVector(-Radius, -Radius, -HalfHeight), FVector(Radius, Radius, HalfHeight));
+		const FBox UnclampedBox = LocalBox;
 		ClampBoxHeight(LocalBox, MaxRelevantHeight);
 
 		FTempoInstanceBounds Entry;
 		Entry.LocalBounds = LocalBox;
 		Entry.Transform = FTransform(Placement.GetRotation(), Placement.GetTranslation());
+		if (bExportPrimitives && LocalBox == UnclampedBox)
+		{
+			FTempoCollisionPrimitive& Primitive = Entry.Primitives.AddDefaulted_GetRef();
+			Primitive.Type = FTempoCollisionPrimitive::EType::Capsule;
+			Primitive.Radius = Radius;
+			Primitive.HalfLength = FMath::Max(HalfHeight - Radius, 0.);
+		}
 		return { Entry };
 	}
 
@@ -816,7 +891,7 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 	// reported as an oriented box rather than an Actor-axis-aligned one. Clamping happens on the
 	// UN-rotated local box, where the box's own Min.Z is still that instance's own base, so the clamp
 	// is unaffected by whatever rotation the instance carries.
-	auto AddInstanceBounds = [&InstanceBounds, &MaxRelevantHeight](const FKAggregateGeom& AggGeom, const FTransform& Placement, const FString& Tag)
+	auto AddInstanceBounds = [&InstanceBounds, &MaxRelevantHeight, bExportPrimitives](const FKAggregateGeom& AggGeom, const FTransform& Placement, const FString& Tag)
 	{
 		FBoxSphereBounds Bounds;
 		AggGeom.CalcBoxSphereBounds(Bounds, FTransform(FQuat::Identity, FVector::ZeroVector, Placement.GetScale3D()));
@@ -825,12 +900,18 @@ TArray<FTempoInstanceBounds> UTempoCoreUtils::GetActorLocalInstanceBounds(const 
 		{
 			return;
 		}
+		const FBox UnclampedBox = LocalBox;
 		ClampBoxHeight(LocalBox, MaxRelevantHeight);
 
 		FTempoInstanceBounds Entry;
 		Entry.LocalBounds = LocalBox;
 		Entry.Transform = FTransform(Placement.GetRotation(), Placement.GetTranslation());
 		Entry.Tag = Tag;
+		// A clamped box is no longer the bounds of the primitives, so a clamped instance stays a box.
+		if (bExportPrimitives && LocalBox == UnclampedBox)
+		{
+			AppendCollisionPrimitives(AggGeom, Placement.GetScale3D(), Entry.Primitives);
+		}
 		InstanceBounds.Add(Entry);
 	};
 
