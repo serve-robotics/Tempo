@@ -16,6 +16,8 @@
 #include "ZoneGraphSubsystem.h"
 #include "ZoneGraphQuery.h"
 
+#include "Algo/AnyOf.h"
+
 void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 	TConstArrayView<FMassSpawnedEntityType> EntityTypes, int32 Count,
 	FFinishedGeneratingSpawnDataSignature& FinishedGeneratingSpawnPointsDelegate) const
@@ -50,11 +52,13 @@ void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 
 	// Scale vehicle spawn count
 	Count *= GMassTrafficNumTrafficVehiclesScale;
-	if (Count <= 0 || EntityTypes.IsEmpty())
+	// All-zero proportions would divide by zero when splitting the count between vehicle types.
+	if (Count <= 0 || !Algo::AnyOf(EntityTypes, [](const FMassSpawnedEntityType& Type) { return Type.Proportion > 0.0f; }))
 	{
 		// Skip spawning
 		TArray<FMassEntitySpawnDataGeneratorResult> EmptyResults;
 		FinishedGeneratingSpawnPointsDelegate.Execute(EmptyResults);
+		return;
 	}
 
 	// Add default spacing to VehicleTypeSpacings. Being the last entry, it will be used as a fallback match
