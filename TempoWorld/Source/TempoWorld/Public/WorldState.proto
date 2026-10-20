@@ -98,6 +98,12 @@ message InstanceBounds {
   // consumer falls back to whatever class/name-based labeling it already does. A non-empty tag is
   // authoritative for this specific cuboid.
   string tag = 3;
+  // Optional decomposed collision primitives for this instance, in the same frame as `local_bounds`
+  // (scale baked in; combine with `transform` to place them relative to the Actor). Empty means the
+  // instance's shape is just the `local_bounds` box. Only filled for Actors whose class opted in (see
+  // UTempoCoreUtils::SetCollisionPrimitiveExportPredicate) and only for instances whose simple collision
+  // is box/sphere/capsule/convex; the primitives' combined axis-aligned bounds are within `local_bounds`.
+  repeated TempoCore.CollisionPrimitive primitives = 4;
 }
 
 message ActorState {

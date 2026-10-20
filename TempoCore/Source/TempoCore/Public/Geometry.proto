@@ -29,6 +29,40 @@ message Box {
   Vector max = 2;
 }
 
+// Simple collision primitives, as authored on a mesh's physics body (Unreal's FKAggregateGeom).
+// Lengths in meters, right-handed, in the frame of the owning instance (see WorldState InstanceBounds).
+message BoxShape {
+  Vector half_extent = 1;
+}
+
+message SphereShape {
+  double radius = 1;
+}
+
+// The axis is the primitive's local +Z. half_length is half the cylinder segment WITHOUT the end caps,
+// so the half-height of the whole capsule is half_length + radius.
+message CapsuleShape {
+  double radius = 1;
+  double half_length = 2;
+}
+
+// Vertices are in the primitive's frame. indices are triangle triplets of the hull surface, wound
+// counter-clockwise seen from outside in the right-handed frame (may be empty).
+message ConvexShape {
+  repeated Vector vertices = 1;
+  repeated int32 indices = 2;
+}
+
+message CollisionPrimitive {
+  Transform transform = 1;  // relative to the owning instance frame
+  oneof shape {
+    BoxShape box = 2;
+    SphereShape sphere = 3;
+    CapsuleShape capsule = 4;
+    ConvexShape convex = 5;
+  }
+}
+
 // 6-DoF velocity. Linear is m/s, angular is rad/s. Right-handed.
 message Twist {
   Vector linear = 1;

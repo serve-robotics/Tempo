@@ -8,6 +8,32 @@
 
 class USplineMeshComponent;
 
+// One simple-collision primitive of an instance (see FTempoInstanceBounds::Primitives), in the same
+// frame as that instance's LocalBounds: the instance's own frame with scale baked in. Mirrors the
+// TempoCore.CollisionPrimitive proto, in Unreal units (cm, left-handed).
+struct FTempoCollisionPrimitive
+{
+	enum class EType : uint8 { Box, Sphere, Capsule, Convex };
+
+	EType Type = EType::Box;
+
+	// Relative to the instance frame. Unused for Convex, whose Vertices are already in that frame.
+	FTransform Transform = FTransform::Identity;
+
+	// Box half extents.
+	FVector HalfExtent = FVector::ZeroVector;
+
+	// Sphere and Capsule radius.
+	double Radius = 0.;
+
+	// Capsule: half the cylinder segment WITHOUT the end caps (axis is local +Z).
+	double HalfLength = 0.;
+
+	// Convex: hull vertices and triangle-triplet indices (may be empty).
+	TArray<FVector> Vertices;
+	TArray<int32> Indices;
+};
+
 // One "instance" of a multi-instance Actor's decomposed bounds (see GetActorLocalInstanceBounds): a
 // box in that instance's own local frame (scaled, but NOT rotated by the instance's own placement)
 // plus the Transform (location + rotation, relative to the Actor) needed to place and orient it.
@@ -31,6 +57,12 @@ struct FTempoInstanceBounds
 	// back to whatever labeling it already does (e.g. class/name-based). See that interface.
 	UPROPERTY(BlueprintReadOnly, Category = "TempoCoreUtils")
 	FString Tag;
+
+	// Optional decomposed simple-collision primitives for this instance, in LocalBounds' frame. Empty
+	// means the instance is just the LocalBounds box. Filled only for an Actor the export predicate
+	// (UTempoCoreUtils::SetCollisionPrimitiveExportPredicate) selects, and only when the primitives'
+	// combined bounds equal LocalBounds (so a height-clamped instance stays a plain box).
+	TArray<FTempoCollisionPrimitive> Primitives;
 };
 
 UCLASS()
@@ -39,6 +71,12 @@ class TEMPOCORE_API UTempoCoreUtils : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
+	// Chooses which Actors GetActorLocalInstanceBounds also decomposes into collision primitives
+	// (FTempoInstanceBounds::Primitives). Unset (the default), or returning false, leaves every instance a
+	// plain box. A project sets this once, e.g. from a game-world subsystem, and clears it on teardown.
+	using FCollisionPrimitiveExportPredicate = TFunction<bool(const AActor*)>;
+	static void SetCollisionPrimitiveExportPredicate(FCollisionPrimitiveExportPredicate Predicate);
+
 	template <typename TEnum>
 	static FString GetEnumValueAsString(const TEnum Value, bool bQualified=false)
 	{

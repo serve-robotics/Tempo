@@ -77,6 +77,63 @@ namespace
 		OutRotation->set_p(ConvertedRotation.Pitch);
 		OutRotation->set_y(ConvertedRotation.Yaw);
 	}
+
+	void SetProtoVector(TempoCore::Vector* Out, const FVector& CmLeftHanded)
+	{
+		const FVector Converted = QuantityConverter<CM2M, L2R>::Convert(CmLeftHanded);
+		Out->set_x(Converted.X);
+		Out->set_y(Converted.Y);
+		Out->set_z(Converted.Z);
+	}
+
+	// Convert one instance collision primitive (Unreal units, in the instance frame with the instance's
+	// own scale baked in) to its proto, applying the Actor's scale the same way the instance's box and
+	// location get it. Sizes are magnitudes, so they use the absolute scale and skip the handedness flip.
+	void SetProtoCollisionPrimitive(TempoCore::CollisionPrimitive& Out, const FTempoCollisionPrimitive& Primitive, const FVector& ActorScale)
+	{
+		const FVector AbsScale = ActorScale.GetAbs();
+		switch (Primitive.Type)
+		{
+		case FTempoCollisionPrimitive::EType::Box:
+		{
+			SetProtoTransform(*Out.mutable_transform(), Primitive.Transform.GetTranslation() * ActorScale, Primitive.Transform.Rotator());
+			const FVector HalfExtent = Primitive.HalfExtent * AbsScale;
+			TempoCore::Vector* ProtoHalfExtent = Out.mutable_box()->mutable_half_extent();
+			ProtoHalfExtent->set_x(QuantityConverter<CM2M>::Convert(HalfExtent.X));
+			ProtoHalfExtent->set_y(QuantityConverter<CM2M>::Convert(HalfExtent.Y));
+			ProtoHalfExtent->set_z(QuantityConverter<CM2M>::Convert(HalfExtent.Z));
+			break;
+		}
+		case FTempoCollisionPrimitive::EType::Sphere:
+			SetProtoTransform(*Out.mutable_transform(), Primitive.Transform.GetTranslation() * ActorScale, Primitive.Transform.Rotator());
+			Out.mutable_sphere()->set_radius(QuantityConverter<CM2M>::Convert(Primitive.Radius * AbsScale.GetMin()));
+			break;
+		case FTempoCollisionPrimitive::EType::Capsule:
+			SetProtoTransform(*Out.mutable_transform(), Primitive.Transform.GetTranslation() * ActorScale, Primitive.Transform.Rotator());
+			Out.mutable_capsule()->set_radius(QuantityConverter<CM2M>::Convert(Primitive.Radius * FMath::Min(AbsScale.X, AbsScale.Y)));
+			Out.mutable_capsule()->set_half_length(QuantityConverter<CM2M>::Convert(Primitive.HalfLength * AbsScale.Z));
+			break;
+		case FTempoCollisionPrimitive::EType::Convex:
+		{
+			// Vertices are already in the instance frame, so the primitive's own transform is identity.
+			SetProtoTransform(*Out.mutable_transform(), FVector::ZeroVector, FRotator::ZeroRotator);
+			TempoCore::ConvexShape* Convex = Out.mutable_convex();
+			for (const FVector& Vertex : Primitive.Vertices)
+			{
+				SetProtoVector(Convex->add_vertices(), Vertex * ActorScale);
+			}
+			// The left- to right-handed conversion mirrors Y, which reverses triangle winding: swap two
+			// vertices of each triangle so the faces still point outward in the right-handed frame.
+			for (int32 Index = 0; Index + 2 < Primitive.Indices.Num(); Index += 3)
+			{
+				Convex->add_indices(Primitive.Indices[Index]);
+				Convex->add_indices(Primitive.Indices[Index + 2]);
+				Convex->add_indices(Primitive.Indices[Index + 1]);
+			}
+			break;
+		}
+		}
+	}
 }
 
 void UTempoWorldStateServiceSubsystem::RegisterServices(FTempoServer& Server)
@@ -324,6 +381,10 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 			if (!Instance.Tag.IsEmpty())
 			{
 				InstanceBoundsProto->set_tag(TCHAR_TO_UTF8(*Instance.Tag));
+			}
+			for (const FTempoCollisionPrimitive& Primitive : Instance.Primitives)
+			{
+				SetProtoCollisionPrimitive(*InstanceBoundsProto->add_primitives(), Primitive, ActorScale);
 			}
 		}
 	}
