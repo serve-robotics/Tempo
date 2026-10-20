@@ -18,7 +18,7 @@ public:
 
 protected:
 
-	TArray<FTempoLaneConnectionInfo> GenerateTempoLaneConnectionInfoArray(const TArray<FLaneConnectionSlot>& Slots) const;
+	TArray<FTempoLaneConnectionInfo> GenerateTempoLaneConnectionInfoArray(const TArray<FLaneConnectionSlot>& Slots, const UZoneShapeComponent& Shape) const; // [SERVE-PATCH P13] + Shape
 
 	AActor* GetIntersectionQueryActor(const UZoneShapeComponent& ZoneShapeComponent) const;
 	AActor* GetRoadQueryActor(const UZoneShapeComponent& ZoneShapeComponent) const;
