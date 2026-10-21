@@ -4,6 +4,7 @@
 #include "TempoZoneGraphBuilder.h"
 
 #include "TempoRoadInterface.h"
+#include "TempoRoadModuleInterface.h" // [SERVE-PATCH P13]
 #include "ZoneShapeUtilities.h"
 
 #include "TempoCoreUtils.h"
@@ -15,13 +16,26 @@ bool FTempoZoneGraphBuilder::ShouldFilterLaneConnection(const UZoneShapeComponen
 	const AActor* SourceRoadQueryActor = GetRoadQueryActor(SourceShapeComp);
 	const AActor* DestRoadQueryActor = GetRoadQueryActor(DestShapeComp);
 
+	// [SERVE-PATCH P13] Shapes the intersection or its road modules own (corner arcs, crosswalks) have no road actor.
+	// Still let the intersection judge a pair of them, with the owners as the connection actors.
+	auto IsOwnedHere = [IntersectionQueryActor](const UZoneShapeComponent& Shape)
+	{
+		const AActor* Owner = Shape.GetOwner();
+		return Owner != nullptr && (Owner == IntersectionQueryActor || Owner->Implements<UTempoRoadModuleInterface>());
+	};
+	if (SourceRoadQueryActor == nullptr && DestRoadQueryActor == nullptr && IsOwnedHere(SourceShapeComp) && IsOwnedHere(DestShapeComp))
+	{
+		SourceRoadQueryActor = SourceShapeComp.GetOwner();
+		DestRoadQueryActor = DestShapeComp.GetOwner();
+	}
+
 	if (IntersectionQueryActor == nullptr || SourceRoadQueryActor == nullptr || DestRoadQueryActor == nullptr)
 	{
 		return false;
 	}
 
-	const TArray<FTempoLaneConnectionInfo>& SourceLaneConnectionInfos = GenerateTempoLaneConnectionInfoArray(SourceSlots);
-	const TArray<FTempoLaneConnectionInfo>& DestLaneConnectionInfos = GenerateTempoLaneConnectionInfoArray(DestSlots);
+	const TArray<FTempoLaneConnectionInfo>& SourceLaneConnectionInfos = GenerateTempoLaneConnectionInfoArray(SourceSlots, SourceShapeComp); // [SERVE-PATCH P13] + Shape
+	const TArray<FTempoLaneConnectionInfo>& DestLaneConnectionInfos = GenerateTempoLaneConnectionInfoArray(DestSlots, DestShapeComp);
 
 	bool bShouldFilterLaneConnection;
 	{
@@ -31,7 +45,7 @@ bool FTempoZoneGraphBuilder::ShouldFilterLaneConnection(const UZoneShapeComponen
 	return bShouldFilterLaneConnection;
 }
 
-TArray<FTempoLaneConnectionInfo> FTempoZoneGraphBuilder::GenerateTempoLaneConnectionInfoArray(const TArray<FLaneConnectionSlot>& Slots) const
+TArray<FTempoLaneConnectionInfo> FTempoZoneGraphBuilder::GenerateTempoLaneConnectionInfoArray(const TArray<FLaneConnectionSlot>& Slots, const UZoneShapeComponent& Shape) const // [SERVE-PATCH P13] + Shape
 {
 	TArray<FTempoLaneConnectionInfo> TempoLaneConnectionInfos;
 
@@ -39,6 +53,7 @@ TArray<FTempoLaneConnectionInfo> FTempoZoneGraphBuilder::GenerateTempoLaneConnec
 	{
 		const int32 LaneIndex = Slot.Index;
 		FTempoLaneConnectionInfo LaneConnectionInfo(Slot, LaneIndex);
+		LaneConnectionInfo.Shape = &Shape; // [SERVE-PATCH P13]
 
 		TempoLaneConnectionInfos.Add(LaneConnectionInfo);
 	}

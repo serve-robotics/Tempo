@@ -119,6 +119,9 @@ struct FTempoLaneConnectionInfo
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tempo Agents|Road Lane Graph|Lane Connection Info")
 	int32 LaneIndex = -1;
+
+	// [SERVE-PATCH P13] The shape the slot is on. An intersection that owns several shapes needs it to tell them apart.
+	const UZoneShapeComponent* Shape = nullptr;
 };
 
 UINTERFACE(Blueprintable)
