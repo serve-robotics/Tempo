@@ -36,7 +36,8 @@ FBox UTempoCoreUtils::GetActorLocalBounds(const AActor* Actor, bool bIncludeHidd
 	TArray<UPrimitiveComponent*> PrimitiveComponents;
 	Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
 
-	FBox LocalBounds;
+	// [SERVE-PATCH P7] An FBox is uninitialized by default, so an Actor with no collision geometry returned stack garbage.
+	FBox LocalBounds(ForceInit);
 
 	for (const UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
