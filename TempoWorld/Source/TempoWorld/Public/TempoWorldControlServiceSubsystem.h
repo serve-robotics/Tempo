@@ -27,7 +27,6 @@ namespace TempoWorld
 	class DestroyActorRequest;
 	class SetActorTransformRequest;
 	class SetComponentTransformRequest;
-	class SetSplinePointsRequest;
 	class GetAllActorsResponse;
 	class GetAllComponentsRequest;
 	class GetAllComponentsResponse;
@@ -71,8 +70,6 @@ public:
 	void SetActorTransform(const TempoWorld::SetActorTransformRequest& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation) const;
 
 	void SetComponentTransform(const TempoWorld::SetComponentTransformRequest& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation) const;
-
-	void SetSplinePoints(const TempoWorld::SetSplinePointsRequest& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation) const;
 
 	void ActivateComponent(const TempoWorld::ActivateComponentRequest& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation) const;
 
