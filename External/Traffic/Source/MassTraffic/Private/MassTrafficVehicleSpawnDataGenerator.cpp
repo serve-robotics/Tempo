@@ -16,7 +16,7 @@
 #include "ZoneGraphSubsystem.h"
 #include "ZoneGraphQuery.h"
 
-#include "Algo/AnyOf.h"
+#include "Algo/AnyOf.h" // [SERVE-PATCH P4]
 
 void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 	TConstArrayView<FMassSpawnedEntityType> EntityTypes, int32 Count,
@@ -52,7 +52,7 @@ void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 
 	// Scale vehicle spawn count
 	Count *= GMassTrafficNumTrafficVehiclesScale;
-	// All-zero proportions would divide by zero when splitting the count between vehicle types.
+	// [SERVE-PATCH P4] All-zero proportions would divide by zero when splitting the count between vehicle types.
 	if (Count <= 0 || !Algo::AnyOf(EntityTypes, [](const FMassSpawnedEntityType& Type) { return Type.Proportion > 0.0f; }))
 	{
 		// Skip spawning
@@ -116,7 +116,7 @@ void UMassTrafficVehicleSpawnDataGenerator::Generate(UObject& QueryOwner,
 	for (const FMassTrafficZoneGraphData& TrafficZoneGraphData : MassTrafficSubsystem->GetTrafficZoneGraphData())
 	{
 		const FZoneGraphStorage* ZoneGraphStorage = ZoneGraphSubsystem->GetZoneGraphStorage(TrafficZoneGraphData.DataHandle);
-		if (!ZoneGraphStorage)
+		if (!ZoneGraphStorage) // [SERVE-PATCH P4]
 		{
 			continue;
 		}

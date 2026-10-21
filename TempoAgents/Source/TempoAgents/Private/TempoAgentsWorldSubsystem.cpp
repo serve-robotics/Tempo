@@ -250,7 +250,7 @@ void UTempoAgentsWorldSubsystem::SetupIntersectionLaneMap()
 				return false;
 			}
 
-			// When the query box captures crosswalk lanes from an adjacent approach (e.g. in dense
+			// [SERVE-PATCH P2] When the query box captures crosswalk lanes from an adjacent approach (e.g. in dense
 			// intersections), keep only the 2 lanes whose midpoints are closest to IntersectionQueryLocation.
 			if (CrosswalkLaneHandles.Num() > 2)
 			{

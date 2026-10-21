@@ -348,7 +348,7 @@ ETempoTextureFilterType UTempoCamera::GetEffectiveTextureFilterType() const
 	return ETempoTextureFilterType::Bilinear;
 }
 
-void UTempoCamera::DeactivateAllTiles()
+void UTempoCamera::DeactivateAllTiles() // [SERVE-PATCH SUP-S6]
 {
 	for (FTempoCameraTile& Tile : Tiles)
 	{
@@ -361,7 +361,7 @@ void UTempoCamera::DeactivateAllTiles()
 
 void UTempoCamera::ReconfigureTilesNow()
 {
-	// Drain all active tiles (releases their view states + PPMs) before re-configuring with
+	// [SERVE-PATCH SUP-S6] Drain all active tiles (releases their view states + PPMs) before re-configuring with
 	// new parameters. Caller must have confirmed no reads are in flight.
 	DeactivateAllTiles();
 

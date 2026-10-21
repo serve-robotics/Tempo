@@ -60,7 +60,7 @@ bool UTempoRoadLaneGraphSubsystem::TryGenerateZoneShapeComponents() const
 		}
 	}
 
-	// Set when an actor fails but the loop continues past it, so an incomplete bake is still
+	// [SERVE-PATCH P1] Set when an actor fails but the loop continues past it, so an incomplete bake is still
 	// reported as a failure to the caller rather than passing silently.
 	bool bAnyActorFailed = false;
 
@@ -128,7 +128,7 @@ bool UTempoRoadLaneGraphSubsystem::TryGenerateZoneShapeComponents() const
 		{
 			DestroyZoneShapeComponents(*Actor);
 
-			// One malformed intersection must not cost every actor after it. Aborting here is
+			// [SERVE-PATCH P1] One malformed intersection must not cost every actor after it. Aborting here is
 			// order-dependent data loss: on Ref_mountainview a single bad approach on the 3rd of
 			// 16 intersections left the remaining 13 with no zone shapes at all, while the road
 			// meshes and crosswalks rendered correctly — so the level looked fine and had no
@@ -167,7 +167,7 @@ bool UTempoRoadLaneGraphSubsystem::TryGenerateZoneShapeComponents() const
 		}
 	}
 
-	return !bAnyActorFailed;
+	return !bAnyActorFailed; // [SERVE-PATCH P1]
 }
 
 void UTempoRoadLaneGraphSubsystem::BuildZoneGraph() const

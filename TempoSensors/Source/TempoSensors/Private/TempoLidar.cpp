@@ -141,7 +141,7 @@ bool UTempoLidar::HasDetectedParameterChange() const
 		|| BeamCalibration != BeamCalibration_Internal;
 }
 
-void UTempoLidar::DeactivateAllTiles()
+void UTempoLidar::DeactivateAllTiles() // [SERVE-PATCH SUP-S6]
 {
 	for (FTempoLidarTile& Tile : Tiles)
 	{
@@ -154,7 +154,7 @@ void UTempoLidar::DeactivateAllTiles()
 
 void UTempoLidar::ReconfigureTilesNow()
 {
-	// Drain all active tiles (releases their view states + PPMs) before re-configuring with new
+	// [SERVE-PATCH SUP-S6] Drain all active tiles (releases their view states + PPMs) before re-configuring with new
 	// parameters. Caller must have confirmed no reads are in flight.
 	DeactivateAllTiles();
 

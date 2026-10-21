@@ -197,7 +197,7 @@ void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceActivated()
 
 void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceDeactivated()
 {
-	// An OpenLevel inside PIE deactivates the old PIE instance before the new one activates. The
+	// [SERVE-PATCH P11] An OpenLevel inside PIE deactivates the old PIE instance before the new one activates. The
 	// Editor-world instance must not take over in that gap, or a SpawnActor/FinishSpawningActor pair
 	// can land on two instances ("No deferred spawn transform recorded", AUT-3194).
 	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor)

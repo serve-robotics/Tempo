@@ -335,7 +335,7 @@ void UTempoWorldStateServiceSubsystem::StreamOverlapEvents(const OverlapEventReq
 	if (AActor* Actor = GetActorWithName(GetWorld(), ActorName))
 	{
 		TArray<TResponseDelegate<OverlapEventResponse>>& ActorRequests = PendingOverlapRequests.FindOrAdd(UTempoCoreUtils::GetActorIdentifier(Actor));
-		// AddDynamic ensures on a second identical binding, which a repeat subscription would add.
+		// [SERVE-PATCH P6] AddDynamic ensures on a second identical binding, which a repeat subscription would add.
 		if (ActorRequests.Num() == 0)
 		{
 			Actor->OnActorBeginOverlap.AddDynamic(this, &UTempoWorldStateServiceSubsystem::UTempoWorldStateServiceSubsystem::OnActorOverlap);

@@ -4,7 +4,7 @@
 #include "TempoZoneGraphBuilder.h"
 
 #include "TempoRoadInterface.h"
-#include "TempoRoadModuleInterface.h"
+#include "TempoRoadModuleInterface.h" // [SERVE-PATCH P13]
 #include "ZoneShapeUtilities.h"
 
 #include "TempoCoreUtils.h"
@@ -34,7 +34,7 @@ bool FTempoZoneGraphBuilder::ShouldFilterLaneConnection(const UZoneShapeComponen
 		return false;
 	}
 
-	const TArray<FTempoLaneConnectionInfo>& SourceLaneConnectionInfos = GenerateTempoLaneConnectionInfoArray(SourceSlots, SourceShapeComp);
+	const TArray<FTempoLaneConnectionInfo>& SourceLaneConnectionInfos = GenerateTempoLaneConnectionInfoArray(SourceSlots, SourceShapeComp); // [SERVE-PATCH P13] + Shape
 	const TArray<FTempoLaneConnectionInfo>& DestLaneConnectionInfos = GenerateTempoLaneConnectionInfoArray(DestSlots, DestShapeComp);
 
 	bool bShouldFilterLaneConnection;
@@ -45,7 +45,7 @@ bool FTempoZoneGraphBuilder::ShouldFilterLaneConnection(const UZoneShapeComponen
 	return bShouldFilterLaneConnection;
 }
 
-TArray<FTempoLaneConnectionInfo> FTempoZoneGraphBuilder::GenerateTempoLaneConnectionInfoArray(const TArray<FLaneConnectionSlot>& Slots, const UZoneShapeComponent& Shape) const
+TArray<FTempoLaneConnectionInfo> FTempoZoneGraphBuilder::GenerateTempoLaneConnectionInfoArray(const TArray<FLaneConnectionSlot>& Slots, const UZoneShapeComponent& Shape) const // [SERVE-PATCH P13] + Shape
 {
 	TArray<FTempoLaneConnectionInfo> TempoLaneConnectionInfos;
 

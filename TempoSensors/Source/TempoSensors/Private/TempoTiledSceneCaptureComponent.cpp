@@ -135,7 +135,7 @@ void UTempoTiledSceneCaptureComponent::Deactivate()
 
 void UTempoTiledSceneCaptureComponent::OnUnregister()
 {
-	// Destroy tile view states while the scene is still valid, before Super unregisters us from it
+	// [SERVE-PATCH SUP-S6] Destroy tile view states while the scene is still valid, before Super unregisters us from it
 	// (matches USceneCaptureComponent::OnUnregister, which destroys the inherited ViewStates here).
 	DeactivateAllTiles();
 
