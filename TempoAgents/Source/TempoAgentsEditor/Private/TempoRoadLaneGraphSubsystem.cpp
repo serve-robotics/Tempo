@@ -60,6 +60,10 @@ bool UTempoRoadLaneGraphSubsystem::TryGenerateZoneShapeComponents() const
 		}
 	}
 
+	// [SERVE-PATCH P1] Set when an actor fails but the loop continues past it, so an incomplete bake is still
+	// reported as a failure to the caller rather than passing silently.
+	bool bAnyActorFailed = false;
+
 	for (AActor* Actor : TActorRange<AActor>(GetWorld()))
 	{
 		if (!IsValid(Actor))
@@ -124,10 +128,17 @@ bool UTempoRoadLaneGraphSubsystem::TryGenerateZoneShapeComponents() const
 		{
 			DestroyZoneShapeComponents(*Actor);
 
+			// [SERVE-PATCH P1] One malformed intersection must not cost every actor after it. Aborting here is
+			// order-dependent data loss: on Ref_mountainview a single bad approach on the 3rd of
+			// 16 intersections left the remaining 13 with no zone shapes at all, while the road
+			// meshes and crosswalks rendered correctly — so the level looked fine and had no
+			// drivable lane graph. Skip the offending actor and keep going; the error is still
+			// logged, and the caller still learns the bake was incomplete via the return value.
 			if (!TryGenerateAndRegisterZoneShapeComponentsForIntersection(*Actor))
 			{
-				UE_LOG(LogTempoAgentsEditor, Error, TEXT("Tempo Lane Graph - Failed to create Intersection ZoneShapeComponents for Actor: %s."), *Actor->GetName());
-				return false;
+				UE_LOG(LogTempoAgentsEditor, Error, TEXT("Tempo Lane Graph - Failed to create Intersection ZoneShapeComponents for Actor: %s.  Skipping it and continuing."), *Actor->GetName());
+				bAnyActorFailed = true;
+				continue;
 			}
 
 			if (Actor->Implements<UTempoCrosswalkInterface>())
@@ -135,25 +146,28 @@ bool UTempoRoadLaneGraphSubsystem::TryGenerateZoneShapeComponents() const
 				if (!TryGenerateAndRegisterZoneShapeComponentsForCrosswalks(*Actor))
 				{
 					UE_LOG(LogTempoAgentsEditor, Error, TEXT("Tempo Lane Graph - Failed to create Crosswalk ZoneShapeComponents for Actor: %s."), *Actor->GetName());
-					return false;
+					bAnyActorFailed = true;
+					continue;
 				}
 
 				if (!TryGenerateAndRegisterZoneShapeComponentsForCrosswalkIntersectionConnectorSegments(*Actor))
 				{
 					UE_LOG(LogTempoAgentsEditor, Error, TEXT("Tempo Lane Graph - Failed to create Crosswalk Intersection Connector Segment ZoneShapeComponents for Actor: %s."), *Actor->GetName());
-					return false;
+					bAnyActorFailed = true;
+					continue;
 				}
 
 				if (!TryGenerateAndRegisterZoneShapeComponentsForCrosswalkIntersections(*Actor))
 				{
 					UE_LOG(LogTempoAgentsEditor, Error, TEXT("Tempo Lane Graph - Failed to create Crosswalk Intersection ZoneShapeComponents for Actor: %s."), *Actor->GetName());
-					return false;
+					bAnyActorFailed = true;
+					continue;
 				}
 			}
 		}
 	}
 
-	return true;
+	return !bAnyActorFailed; // [SERVE-PATCH P1]
 }
 
 void UTempoRoadLaneGraphSubsystem::BuildZoneGraph() const
