@@ -46,7 +46,27 @@ void FTempoAgentsEditorModule::ShutdownModule()
 
 void FTempoAgentsEditorModule::RegisterMenus()
 {
-	// No menu or toolbar entries — use the GIS tools panel "Build Zone Graph" button instead.
+	// Owner will be used for cleanup in call to UToolMenus::UnregisterOwner
+	FToolMenuOwnerScoped OwnerScoped(this);
+
+	{
+		UToolMenu* Menu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Window");
+		{
+			FToolMenuSection& Section = Menu->FindOrAddSection("WindowLayout");
+			Section.AddMenuEntryWithCommandList(FTempoAgentsEditorCommands::Get().PluginAction, PluginCommands);
+		}
+	}
+
+	{
+		UToolMenu* ToolbarMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.LevelEditorToolbar.PlayToolbar");
+		{
+			FToolMenuSection& Section = ToolbarMenu->FindOrAddSection("PluginTools");
+			{
+				FToolMenuEntry& Entry = Section.AddEntry(FToolMenuEntry::InitToolBarButton(FTempoAgentsEditorCommands::Get().PluginAction));
+				Entry.SetCommandList(PluginCommands);
+			}
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

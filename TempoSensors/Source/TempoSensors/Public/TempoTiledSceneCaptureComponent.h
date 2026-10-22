@@ -24,7 +24,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Activate(bool bReset = false) override;
 	virtual void Deactivate() override;
-	// Release per-tile render resources (view states + PPMs) when the component unregisters from the
+	// [SERVE-PATCH SUP-S6] Release per-tile render resources (view states + PPMs) when the component unregisters from the
 	// scene. USceneCaptureComponent::OnUnregister only destroys the inherited ViewStates array; our
 	// per-tile FSceneViewStateReferences aren't in it, so without this they (and the render-thread
 	// history/MIDPool they hold) leak until GC, accumulating across PIE sessions.
@@ -66,7 +66,7 @@ protected:
 	// Subclasses sync the tile array to the current sensor configuration.
 	virtual void SyncTiles() PURE_VIRTUAL(UTempoTiledSceneCaptureComponent::SyncTiles, );
 
-	// Deactivate every active tile, releasing its view state and PPM. Called from OnUnregister and
+	// [SERVE-PATCH SUP-S6] Deactivate every active tile, releasing its view state and PPM. Called from OnUnregister and
 	// ReconfigureTilesNow (which need to drain tiles before teardown / re-sync).
 	virtual void DeactivateAllTiles() PURE_VIRTUAL(UTempoTiledSceneCaptureComponent::DeactivateAllTiles, );
 

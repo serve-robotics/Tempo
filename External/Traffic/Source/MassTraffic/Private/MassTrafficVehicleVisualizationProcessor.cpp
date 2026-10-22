@@ -9,10 +9,7 @@
 #include "MassEntityManager.h"
 #include "MassExecutionContext.h"
 #include "MassActorSubsystem.h"
-#include "MassMovementFragments.h"
 #include "Components/PrimitiveComponent.h"
-#include "GameFramework/Pawn.h"
-#include "GameFramework/PawnMovementComponent.h"
 #include "VisualLogger/VisualLogger.h"
 
 //----------------------------------------------------------------------//
@@ -233,7 +230,6 @@ void UMassTrafficVehicleUpdateCustomVisualizationProcessor::ConfigureQueries(con
 	EntityQuery.AddRequirement<FMassTrafficVehicleLightsFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.AddRequirement<FEnvironmentalBrightnessFragment>(EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
 	EntityQuery.AddRequirement<FMassTrafficVehiclePhysicsFragment>(EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
-	EntityQuery.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
 
 #if WITH_MASSTRAFFIC_DEBUG
 	DebugEntityQuery = EntityQuery;
@@ -261,7 +257,6 @@ void UMassTrafficVehicleUpdateCustomVisualizationProcessor::Execute(FMassEntityM
 		const TConstArrayView<FTransformFragment> TransformFragments = Context.GetFragmentView<FTransformFragment>();
 		const TConstArrayView<FMassRepresentationLODFragment> RepresentationLODFragments = Context.GetFragmentView<FMassRepresentationLODFragment>();
 		const TConstArrayView<FEnvironmentalBrightnessFragment> EnvironmentalBrightnessFragments = Context.GetFragmentView<FEnvironmentalBrightnessFragment>();
-		const TConstArrayView<FMassVelocityFragment> VelocityFragments = Context.GetFragmentView<FMassVelocityFragment>();
 		const TArrayView<FMassTrafficVehicleLightsFragment> VehicleStateFragments = Context.GetMutableFragmentView<FMassTrafficVehicleLightsFragment>();
 		const TArrayView<FMassActorFragment> ActorFragments = Context.GetMutableFragmentView<FMassActorFragment>();
 		const TArrayView<FMassRepresentationFragment> VisualizationFragments = Context.GetMutableFragmentView<FMassRepresentationFragment>();
@@ -320,29 +315,11 @@ void UMassTrafficVehicleUpdateCustomVisualizationProcessor::Execute(FMassEntityM
 
 						if (Actor)
 						{
-							// Teleport actor to simulated position.
-							// SetActorTransform never writes ComponentVelocity, and these LowRes actors have no
-							// MovementComponent to do it for them, so anything reading AActor::GetVelocity() (e.g.
-							// Tempo's world state service) would see a stationary actor. Publish Mass's own velocity
-							// alongside the pose so the two stay consistent.
+							// Teleport actor to simulated position
 							const FTransform NewActorTransform = TransformFragment.GetTransform();
-							const FVector NewActorVelocity = VelocityFragments.IsEmpty() ? FVector::ZeroVector : VelocityFragments[EntityIdx].Value;
-							Context.Defer().PushCommand<FMassDeferredSetCommand>([Actor, NewActorTransform, NewActorVelocity](FMassEntityManager& System)
+							Context.Defer().PushCommand<FMassDeferredSetCommand>([Actor, NewActorTransform](FMassEntityManager& System)
 							{
 								Actor->SetActorTransform(NewActorTransform);
-								if (USceneComponent* ActorRootComponent = Actor->GetRootComponent())
-								{
-									ActorRootComponent->ComponentVelocity = NewActorVelocity;
-								}
-								// A Pawn with a movement component reports that component's Velocity, not
-								// ComponentVelocity (APawn::GetVelocity), so keep the two in sync.
-								if (const APawn* ActorAsPawn = Cast<APawn>(Actor))
-								{
-									if (UPawnMovementComponent* PawnMovement = ActorAsPawn->GetMovementComponent())
-									{
-										PawnMovement->Velocity = NewActorVelocity;
-									}
-								}
 							});
 						
 							// Has simple vehicle physics?

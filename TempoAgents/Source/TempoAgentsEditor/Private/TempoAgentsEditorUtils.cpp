@@ -9,8 +9,32 @@
 
 bool UTempoAgentsEditorUtils::RunTempoZoneGraphBuilderPipeline()
 {
-	// Disabled: use the GIS tools panel "Build Zone Graph" button instead.
-	// That button runs SpawnTempoIntersectionActors first, which is required to
-	// produce correct results for GIS-imported roads.
-	return false;
+	UTempoRoadLaneGraphSubsystem* TempoRoadLaneGraphSubsystem = GEditor ? GEditor->GetEditorSubsystem<UTempoRoadLaneGraphSubsystem>() : nullptr;
+	if (!TempoRoadLaneGraphSubsystem)
+	{
+		return false;
+	}
+
+	TempoRoadLaneGraphSubsystem->SetupZoneGraphBuilder();
+	if (!TempoRoadLaneGraphSubsystem->TryGenerateZoneShapeComponents())
+	{
+		return false;
+	}
+
+	const UWorld* World = GEditor ? GEditor->GetEditorWorldContext(false).World() : nullptr;
+	if (!World)
+	{
+		return false;
+	}
+
+	UTempoAgentsWorldSubsystem* AgentsWorldSubsystem = World->GetSubsystem<UTempoAgentsWorldSubsystem>();
+	if (!AgentsWorldSubsystem)
+	{
+		return false;
+	}
+
+	AgentsWorldSubsystem->SetupTrafficControllers();
+	TempoRoadLaneGraphSubsystem->BuildZoneGraph();
+
+	return true;
 }

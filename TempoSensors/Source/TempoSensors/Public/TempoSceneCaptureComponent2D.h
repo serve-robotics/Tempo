@@ -441,16 +441,15 @@ protected:
 	// A fence to indicate that our staging textures have been initialized. Should only be accessed from the Game thread.
 	FRenderCommandFence TextureInitFence;
 
-protected:
-	// Our Queue of pending texture reads.
-	FTextureReadQueue TextureReadQueue;
-
 private:
 	// Starts or restarts the timer that calls MaybeCapture
 	virtual void RestartCaptureTimer();
 
 	// Capture a frame, if any client has requested one.
 	virtual void MaybeCapture();
+
+	// Our Queue of pending texture reads.
+	FTextureReadQueue TextureReadQueue;
 
 	FTimerHandle TimerHandle;
 };

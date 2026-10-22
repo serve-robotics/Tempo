@@ -14,10 +14,6 @@ message SpawnActorRequest {
   TempoCore.Transform transform = 3;
   // Optional actor name that `transform` is interpreted relative to.
   string relative_to_actor = 4;
-  // Optional requested name for the spawned actor. Empty (default) keeps today's engine-generated
-  // [Class]_[Number] name. If set and already in use in the level, the spawn fails with
-  // ALREADY_EXISTS rather than silently falling back to an auto-generated name.
-  string name = 5;
 }
 
 message SpawnActorResponse {
@@ -89,22 +85,6 @@ message SetComponentTransformRequest {
   TempoCore.Transform transform = 3;
   // If true, `transform` is in world space; otherwise it is relative to the component's parent.
   bool relative_to_world = 4;
-}
-
-message SetSplinePointsRequest {
-  // Name of the owning actor.
-  string actor = 1;
-  // Name of the USplineComponent to rebuild.
-  string component = 2;
-  // Ordered points to rebuild the spline component's curve from -- replaces all existing points.
-  // Must have at least 2. Meters / right-handed, in world space or relative to the component's
-  // parent depending on `relative_to_world`.
-  repeated TempoCore.Vector points = 3;
-  // If true, `points` are in world space; otherwise relative to the component's parent. Matches
-  // SetComponentTransformRequest's own field of the same name and default.
-  bool relative_to_world = 4;
-  // If true, the spline forms a closed loop (SplineComponent::SetClosedLoop).
-  bool closed_loop = 5;
 }
 
 message ActivateComponentRequest {
@@ -478,14 +458,6 @@ message CallFunctionRequest {
   string component = 2;
   // Name of the UFUNCTION to invoke.
   string function = 3;
-  // String-encoded arguments, one per non-return, non-out parameter, in the
-  // function's declared parameter order. Each is parsed according to that
-  // parameter's actual property type (bool/int/int64/float/double/string/name/enum
-  // -- the same primitive set the Set*Property RPCs support). Leave empty for a
-  // parameterless function. A function with a return value, an out/reference
-  // parameter, or a parameter of any other type (struct, array, object, ...) is
-  // rejected.
-  repeated string args = 4;
 }
 
 // One operation in a SetProperties batch. The oneof selects which set-property
@@ -568,8 +540,6 @@ service WorldControlService {
   rpc SetActorTransform(SetActorTransformRequest) returns (TempoCore.Empty);
 
   rpc SetComponentTransform(SetComponentTransformRequest) returns (TempoCore.Empty);
-
-  rpc SetSplinePoints(SetSplinePointsRequest) returns (TempoCore.Empty);
 
   rpc ActivateComponent(ActivateComponentRequest) returns (TempoCore.Empty);
 

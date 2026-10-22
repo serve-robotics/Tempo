@@ -571,7 +571,7 @@ bool FMassTrafficSignIntersectionSide::AreAllEntitiesOnCrosswalkYielding(const F
 
 		const FMassTrafficCrosswalkLaneInfo* CrosswalkLaneInfo = MassTrafficSubsystem.GetCrosswalkLaneInfo(CrosswalkLaneHandle);
 
-		// A CrosswalkLaneInfo only exists for crosswalk lanes that are downstream of a registered vehicle lane
+		// [SERVE-PATCH P3] A CrosswalkLaneInfo only exists for crosswalk lanes that are downstream of a registered vehicle lane
 		// (see UMassTrafficSubsystem::AddDownstreamCrosswalkLane). An intersection side's CrosswalkLanes, however,
 		// are discovered purely by spatial proximity to the side (see MassTrafficIntersections.cpp), so a crosswalk
 		// lane can legitimately be near this side without crossing any vehicle lane. Such a lane has no vehicles for

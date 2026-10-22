@@ -41,7 +41,7 @@ protected:
 	UPROPERTY(EditAnywhere)
 	FDateTime SimDateTime = FDateTime(2024, 4, 3, 11, 0, 0, 0);
 
-	// Explicitly re-capture the captured-scene sky lights so their ambient cubemap matches the current
+	// [SERVE-PATCH SUP-G1] Explicitly re-capture the captured-scene sky lights so their ambient cubemap matches the current
 	// sun position. Needed for headless/offscreen (-RenderOffscreen) datagen runs: the real-time
 	// sky-capture path only runs inside the main deferred view render, which never happens offscreen,
 	// and the static sky-capture queue is only pumped from UGameEngine::Tick, which is skipped offscreen

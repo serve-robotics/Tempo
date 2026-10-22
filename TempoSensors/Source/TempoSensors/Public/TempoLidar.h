@@ -257,7 +257,7 @@ protected:
 	virtual bool HasDetectedParameterChange() const override;
 	virtual void ReconfigureTilesNow() override;
 	virtual void UpdateInternalMirrors() override;
-	virtual void DeactivateAllTiles() override;
+	virtual void DeactivateAllTiles() override; // [SERVE-PATCH SUP-S6]
 	// End UTempoTiledSceneCaptureComponent tile interface
 
 	void ConfigureTile(FTempoLidarTile& Tile, double InYawOffset, double SubHorizontalFOV, int32 SubHorizontalBeams, bool bActivate);

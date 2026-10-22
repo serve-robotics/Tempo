@@ -59,24 +59,6 @@ namespace
 		OutBox.mutable_max()->set_y(BoxMax.Y);
 		OutBox.mutable_max()->set_z(BoxMax.Z);
 	}
-
-	// Convert an Unreal-frame location (cm, left-handed) + rotation (deg, left-handed) to a Tempo
-	// proto Transform (m / rad, right-handed). Location and Rotation may be relative to an Actor's
-	// local frame rather than world -- the unit/handedness conversions are frame-agnostic.
-	void SetProtoTransform(TempoCore::Transform& OutTransform, const FVector& Location, const FRotator& Rotation)
-	{
-		const FVector ConvertedLocation = QuantityConverter<CM2M, L2R>::Convert(Location);
-		TempoCore::Vector* OutLocation = OutTransform.mutable_location();
-		OutLocation->set_x(ConvertedLocation.X);
-		OutLocation->set_y(ConvertedLocation.Y);
-		OutLocation->set_z(ConvertedLocation.Z);
-
-		const FRotator ConvertedRotation = QuantityConverter<Deg2Rad, L2R>::Convert(Rotation);
-		TempoCore::Rotation* OutRotation = OutTransform.mutable_rotation();
-		OutRotation->set_r(ConvertedRotation.Roll);
-		OutRotation->set_p(ConvertedRotation.Pitch);
-		OutRotation->set_y(ConvertedRotation.Yaw);
-	}
 }
 
 void UTempoWorldStateServiceSubsystem::RegisterServices(FTempoServer& Server)
@@ -218,19 +200,7 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 	ActorStateRotation->set_p(ActorRotation.Pitch);
 	ActorStateRotation->set_y(ActorRotation.Yaw);
 
-	// APawn::GetVelocity() reads its movement component, not ComponentVelocity, unless the root
-	// simulates physics. Mass-driven Pawns with no movement component (the LowRes cyclist/scooter
-	// Blueprints) therefore report zero even though MassTraffic publishes a real velocity to the
-	// root's ComponentVelocity. Fall back to that rather than recording a moving actor as stopped.
-	FVector RawActorLinearVelocity = Actor->GetVelocity();
-	if (RawActorLinearVelocity.IsNearlyZero())
-	{
-		if (const USceneComponent* ActorRootComponent = Actor->GetRootComponent())
-		{
-			RawActorLinearVelocity = ActorRootComponent->GetComponentVelocity();
-		}
-	}
-	const FVector ActorLinearVelocity = QuantityConverter<CM2M, L2R>::Convert(RawActorLinearVelocity);
+	const FVector ActorLinearVelocity = QuantityConverter<CM2M, L2R>::Convert(Actor->GetVelocity());
 	TempoCore::Twist* ActorStateVelocity = ActorState.mutable_velocity();
 	TempoCore::Vector* ActorStateLinearVel = ActorStateVelocity->mutable_linear();
 	ActorStateLinearVel->set_x(ActorLinearVelocity.X);
@@ -257,31 +227,8 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 	ActorStateAngularVel->set_z(ActorAngularVelocity.Z);
 
 	const FBox ActorLocalBounds = UTempoCoreUtils::GetActorLocalBounds(Actor, bIncludeHiddenComponents);
-
-	// An invalid box means no component contributed any collision geometry -- the Actor has no
-	// BodySetup/AggGeom anywhere (collision disabled, or geometry that lives on instances of a
-	// component rather than on the Actor itself, as with a HISM-based ASplinePropLine). There is no
-	// meaningful box to send: the fields below are all zero, which a client can only read as a
-	// degenerate point-sized Actor. Warn once per Actor so a mis-set-up asset is diagnosable instead
-	// of silently arriving as a zero-extent obstacle. Note instance_bounds below may still be
-	// populated in exactly this case, and is the correct source for such an Actor.
-	if (!ActorLocalBounds.IsValid)
-	{
-		static TSet<FString> WarnedActors;
-		const FString ActorIdentifier = UTempoCoreUtils::GetActorIdentifier(Actor);
-		if (!WarnedActors.Contains(ActorIdentifier))
-		{
-			WarnedActors.Add(ActorIdentifier);
-			UE_LOG(LogTempoWorld, Warning, TEXT("Actor %s has no collision geometry on any component, so its "
-				"bounds/local_bounds are reported as zero. Check that its components have collision enabled "
-				"(a component with no BodySetup contributes nothing to bounds); if its geometry is instanced, "
-				"use instance_bounds instead."), *ActorIdentifier);
-		}
-	}
-
 	// The proto Box is axis-aligned in world space, so transform all 8 corners of the local box
 	// (TransformBy) rather than just Min/Max, which would be wrong whenever the Actor is rotated.
-	// TransformBy propagates invalidity as a zeroed box, so the invalid case stays zero, not garbage.
 	const FBox ActorWorldBounds = ActorLocalBounds.TransformBy(Actor->GetTransform());
 
 	// Local bounds with the Actor's scale baked in (the transmitted transform carries location and
@@ -301,32 +248,6 @@ TempoWorld::ActorState GetActorState(const AActor* Actor, const UWorld* World, b
 
 	SetProtoBox(*ActorState.mutable_bounds(), ActorWorldBounds);
 	SetProtoBox(*ActorState.mutable_local_bounds(), ActorScaledLocalBounds);
-
-	// Sent whenever GetActorLocalInstanceBounds returns anything: usually that means it decomposed into
-	// more than one box (e.g. a HISM-based line of trees), but it can also be exactly one box that's
-	// still worth sending because it's NOT a duplicate of local_bounds above -- e.g. a pedestrian's
-	// single capsule-derived box, which is a tighter and correctly-oriented replacement for the
-	// generic per-component union local_bounds would otherwise report for a multi-part character rig.
-	const TArray<FTempoInstanceBounds> ActorLocalInstanceBounds = UTempoCoreUtils::GetActorLocalInstanceBounds(Actor, bIncludeHiddenComponents);
-	if (!ActorLocalInstanceBounds.IsEmpty())
-	{
-		for (const FTempoInstanceBounds& Instance : ActorLocalInstanceBounds)
-		{
-			TempoWorld::InstanceBounds* InstanceBoundsProto = ActorState.add_instance_bounds();
-
-			// Instance.LocalBounds and Instance.Transform's location are both in the Actor's local,
-			// pre-Actor-scale frame (the same frame ActorLocalBounds is in above), so both get the
-			// Actor's scale baked in the same way ActorScaledLocalBounds does, keeping local_bounds and
-			// transform in the same scaled frame a client combines them in.
-			const FBox InstanceScaledLocalBounds(Instance.LocalBounds.Min * ActorScale, Instance.LocalBounds.Max * ActorScale);
-			SetProtoBox(*InstanceBoundsProto->mutable_local_bounds(), InstanceScaledLocalBounds);
-			SetProtoTransform(*InstanceBoundsProto->mutable_transform(), Instance.Transform.GetTranslation() * ActorScale, Instance.Transform.Rotator());
-			if (!Instance.Tag.IsEmpty())
-			{
-				InstanceBoundsProto->set_tag(TCHAR_TO_UTF8(*Instance.Tag));
-			}
-		}
-	}
 
 	return ActorState;
 }
@@ -414,9 +335,7 @@ void UTempoWorldStateServiceSubsystem::StreamOverlapEvents(const OverlapEventReq
 	if (AActor* Actor = GetActorWithName(GetWorld(), ActorName))
 	{
 		TArray<TResponseDelegate<OverlapEventResponse>>& ActorRequests = PendingOverlapRequests.FindOrAdd(UTempoCoreUtils::GetActorIdentifier(Actor));
-		// Only bind the overlap delegate on the first subscription for this actor; AddDynamic is
-		// AddUnique and ensures if the same this+OnActorOverlap binding is added twice, which happens
-		// when a client subscribes to the same actor again before an overlap event clears the request.
+		// [SERVE-PATCH P6] AddDynamic ensures on a second identical binding, which a repeat subscription would add.
 		if (ActorRequests.Num() == 0)
 		{
 			Actor->OnActorBeginOverlap.AddDynamic(this, &UTempoWorldStateServiceSubsystem::UTempoWorldStateServiceSubsystem::OnActorOverlap);

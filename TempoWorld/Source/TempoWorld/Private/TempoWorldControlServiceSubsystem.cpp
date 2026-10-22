@@ -8,7 +8,6 @@
 #include "TempoCoreUtils.h"
 #include "TempoWorldUtils.h"
 
-#include "Components/SplineComponent.h"
 #include "EngineUtils.h"
 #if WITH_EDITOR
 #include "LevelEditor.h"
@@ -26,7 +25,6 @@ using AddComponentResponse = TempoWorld::AddComponentResponse;
 using DestroyComponentRequest = TempoWorld::DestroyComponentRequest;
 using SetActorTransformRequest = TempoWorld::SetActorTransformRequest;
 using SetComponentTransformRequest = TempoWorld::SetComponentTransformRequest;
-using SetSplinePointsRequest = TempoWorld::SetSplinePointsRequest;
 using ActivateComponentRequest = TempoWorld::ActivateComponentRequest;
 using DeactivateComponentRequest = TempoWorld::DeactivateComponentRequest;
 using GetAllActorsResponse = TempoWorld::GetAllActorsResponse;
@@ -119,7 +117,6 @@ void UTempoWorldControlServiceSubsystem::RegisterServices(FTempoServer& Server)
 		SimpleRequestHandler(&WorldControlAsyncService::RequestDestroyComponent, &UTempoWorldControlServiceSubsystem::DestroyComponent),
 		SimpleRequestHandler(&WorldControlAsyncService::RequestSetActorTransform, &UTempoWorldControlServiceSubsystem::SetActorTransform),
 		SimpleRequestHandler(&WorldControlAsyncService::RequestSetComponentTransform, &UTempoWorldControlServiceSubsystem::SetComponentTransform),
-		SimpleRequestHandler(&WorldControlAsyncService::RequestSetSplinePoints, &UTempoWorldControlServiceSubsystem::SetSplinePoints),
 		SimpleRequestHandler(&WorldControlAsyncService::RequestGetAllActors, &UTempoWorldControlServiceSubsystem::GetAllActors),
 		SimpleRequestHandler(&WorldControlAsyncService::RequestGetAllComponents, &UTempoWorldControlServiceSubsystem::GetAllComponents),
 		SimpleRequestHandler(&WorldControlAsyncService::RequestGetActorProperties, &UTempoWorldControlServiceSubsystem::GetActorProperties),
@@ -200,21 +197,9 @@ void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceActivated()
 
 void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceDeactivated()
 {
-	// Another instance deactivated (a peer relinquishing, or its world being destroyed mid-travel).
-	// An Editor-world instance must NOT grab activation away from a live Game/PIE world's own
-	// instance here -- doing so unconditionally raced with an OpenLevel triggered WHILE already in
-	// PIE (e.g. genesis's per-episode load_level RPC): the OLD PIE world's Deinitialize() removes
-	// itself as a listener, deactivates whichever instance is currently active, THEN broadcasts
-	// Deactivated -- and since the Editor's own persistent-level instance is alive the whole time
-	// PIE runs (PIE never destroys the Editor world), it would reactivate itself as the active
-	// WorldControlService handler in the gap before the NEW PIE world's Initialize() runs and
-	// explicitly re-activates itself. Any SpawnActor/FinishSpawningActor request pair straddling
-	// that gap then silently landed on two different instances: the actor was found by name in
-	// FinishSpawningActor (GetActorWithName searches whichever world is currently active, and by
-	// then that's back to the correct PIE world), but its DeferredSpawnTransforms entry lived on
-	// the Editor instance that briefly (and wrongly) handled SpawnActor -- producing "No deferred
-	// spawn transform recorded" for a perfectly valid deferred spawn, 100% of the time (SplinePropLine
-	// is the only actor type using this deferred spawn/finish RPC pair). See AUT-3194.
+	// [SERVE-PATCH P11] An OpenLevel inside PIE deactivates the old PIE instance before the new one activates. The
+	// Editor-world instance must not take over in that gap, or a SpawnActor/FinishSpawningActor pair
+	// can land on two instances ("No deferred spawn transform recorded", AUT-3194).
 	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor)
 	{
 		for (TObjectIterator<UTempoWorldControlServiceSubsystem> It; It; ++It)
@@ -223,8 +208,6 @@ void UTempoWorldControlServiceSubsystem::OnTempoWorldControlServiceDeactivated()
 			if (Other != this && IsValid(Other) && Other->GetWorld() &&
 				(Other->GetWorld()->WorldType == EWorldType::PIE || Other->GetWorld()->WorldType == EWorldType::Game))
 			{
-				// A Game/PIE world instance is still alive (even if mid-teardown) -- let it, or its
-				// replacement's own Initialize(), be the one to (re)activate. Don't steal.
 				return;
 			}
 		}
@@ -264,6 +247,8 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 	}
 
 	FTransform SpawnTransform = ToUnrealTransform(Request.transform());
+	FVector SpawnLocation = SpawnTransform.GetLocation();
+	FRotator SpawnRotation = SpawnTransform.GetRotation().Rotator();
 
 	if (!Request.relative_to_actor().empty())
 	{
@@ -276,37 +261,20 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 			return;
 		}
 		SpawnTransform = SpawnTransform * RelativeToActor->GetActorTransform();
+		SpawnLocation = SpawnTransform.GetLocation();
+		SpawnRotation = SpawnTransform.GetRotation().Rotator();
 	}
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-	SpawnParameters.bDeferConstruction = Request.deferred();
-
-	const bool bNameRequested = !Request.name().empty();
-	if (bNameRequested)
-	{
-		const FString RequestedName(UTF8_TO_TCHAR(Request.name().c_str()));
-		if (RequestedName.Contains(TEXT(".")) || RequestedName.Contains(TEXT(":")))
-		{
-			const FString ErrorMsg = FString::Printf(TEXT("SpawnActor request name '%s' is invalid: '.' and ':' are object-path separators and are not allowed in a spawned actor name"), *RequestedName);
-			ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(grpc::INVALID_ARGUMENT, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
-			return;
-		}
-		SpawnParameters.Name = FName(*RequestedName);
-		// Fail loudly on collision rather than the enum's default (Required_Fatal, which asserts) or
-		// silently suffixing (Requested) -- genesis is the source of truth for the name it asked for.
-		SpawnParameters.NameMode = FActorSpawnParameters::ESpawnActorNameMode::Required_ErrorAndReturnNull;
-	}
-
-	const AActor* SpawnedActor = World->SpawnActor(Class, &SpawnTransform, SpawnParameters);
+	const AActor* SpawnedActor = Request.deferred()
+		? World->SpawnActorDeferred<AActor>(Class, SpawnTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn)
+		: World->SpawnActor(Class, &SpawnLocation, &SpawnRotation, SpawnParameters);
 
 	if (!SpawnedActor)
 	{
-		const FVector SpawnLocation = SpawnTransform.GetLocation();
-		const FString ErrorMsg = bNameRequested
-			? FString::Printf(TEXT("Failed to spawn actor of type '%s': requested name '%s' is already in use"), *ActorTypeName, UTF8_TO_TCHAR(Request.name().c_str()))
-			: FString::Printf(TEXT("Failed to spawn actor of type '%s' at location (%f, %f, %f)"), *ActorTypeName, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
-		ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(bNameRequested ? grpc::ALREADY_EXISTS : grpc::ABORTED, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
+		const FString ErrorMsg = FString::Printf(TEXT("Failed to spawn actor of type '%s' at location (%f, %f, %f)"), *ActorTypeName, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
+		ResponseContinuation.ExecuteIfBound(SpawnActorResponse(), grpc::Status(grpc::ABORTED, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 		return;
 	}
 
@@ -316,14 +284,7 @@ void UTempoWorldControlServiceSubsystem::SpawnActor(const SpawnActorRequest& Req
 	}
 
 	SpawnActorResponse Response;
-	// When a name was requested, echo back exactly that -- guaranteed to be the actor's real FName
-	// (NameMode=Required_ErrorAndReturnNull above means the spawn either used this exact name or
-	// failed outright, never silently suffixed). GetActorIdentifier() (the editor label) is NOT a
-	// safe substitute here: it's derived from the class name, not the requested FName, so two
-	// actors of the same class spawned with different literal names can still materialize the
-	// IDENTICAL label -- which previously made this response name useless for telling them apart in
-	// a later FinishSpawningActor/CallFunction/etc. call (see GetActorWithName's own comment; AUT-3194).
-	Response.set_name(bNameRequested ? Request.name() : std::string(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(SpawnedActor))));
+	Response.set_name(TCHAR_TO_UTF8(*UTempoCoreUtils::GetActorIdentifier(SpawnedActor)));
 	*Response.mutable_transform() = FromUnrealTransform(SpawnedActor->GetActorTransform());
 
 	ResponseContinuation.ExecuteIfBound(Response, grpc::Status_OK);
@@ -631,60 +592,6 @@ void UTempoWorldControlServiceSubsystem::SetComponentTransform(const TempoWorld:
 	{
 		Component->SetRelativeTransform(Transform);
 	}
-
-	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
-}
-
-void UTempoWorldControlServiceSubsystem::SetSplinePoints(const TempoWorld::SetSplinePointsRequest& Request, const TResponseDelegate<TempoCore::Empty>& ResponseContinuation) const
-{
-	if (Request.actor().empty())
-	{
-		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, "actor must be specified in SetSplinePoints request"));
-		return;
-	}
-
-	if (Request.component().empty())
-	{
-		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, "component must be specified in SetSplinePoints request"));
-		return;
-	}
-
-	if (Request.points_size() < 2)
-	{
-		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, "SetSplinePoints requires at least 2 points"));
-		return;
-	}
-
-	const FString ActorName(UTF8_TO_TCHAR(Request.actor().c_str()));
-	AActor* Actor = GetActorWithName(GetWorld(), ActorName);
-	if (!Actor)
-	{
-		const FString ErrorMsg = FString::Printf(TEXT("Failed to find actor '%s' for SetSplinePoints request"), *ActorName);
-		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::NOT_FOUND, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
-		return;
-	}
-
-	const FString ComponentName(UTF8_TO_TCHAR(Request.component().c_str()));
-	USplineComponent* Spline = GetComponentWithName<USplineComponent>(Actor, ComponentName);
-	if (!Spline)
-	{
-		const FString ErrorMsg = FString::Printf(TEXT("Failed to find spline component '%s' on actor '%s' for SetSplinePoints request"), *ComponentName, *ActorName);
-		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::NOT_FOUND, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
-		return;
-	}
-
-	// Matches SetComponentTransformRequest's own relative_to_world field and default (relative to
-	// the component's parent unless explicitly set to world space).
-	const ESplineCoordinateSpace::Type Space = Request.relative_to_world() ? ESplineCoordinateSpace::World : ESplineCoordinateSpace::Local;
-
-	Spline->ClearSplinePoints(false);
-	for (const TempoCore::Vector& Point : Request.points())
-	{
-		const FVector Location = QuantityConverter<M2CM,R2L>::Convert(FVector(Point.x(), Point.y(), Point.z()));
-		Spline->AddSplinePoint(Location, Space, false);
-	}
-	Spline->SetClosedLoop(Request.closed_loop(), false);
-	Spline->UpdateSpline();
 
 	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
 }
@@ -2653,118 +2560,14 @@ void UTempoWorldControlServiceSubsystem::CallObjectFunction(const CallFunctionRe
 		return;
 	}
 
-	// Collect the function's in-parameters (declaration order), rejecting anything this simple
-	// string-args scheme can't express: a return value, or a true out/reference parameter (a
-	// const-reference in-param is fine -- CPF_ConstParm without CPF_OutParm is how UHT marks
-	// those -- only a genuine out/non-const-ref param is unsupported here).
-	TArray<FProperty*> InParams;
-	for (TFieldIterator<FProperty> It(Function); It; ++It)
+	if (Function->NumParms != 0)
 	{
-		FProperty* Prop = *It;
-		if (!Prop->HasAnyPropertyFlags(CPF_Parm))
-		{
-			continue;
-		}
-		if (Prop->HasAnyPropertyFlags(CPF_ReturnParm))
-		{
-			const FString ErrorMsg = FString::Printf(TEXT("Function '%s' on object '%s' has a return value, which is not currently supported"), *FunctionName.ToString(), *Object->GetName());
-			ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
-			return;
-		}
-		if (Prop->HasAnyPropertyFlags(CPF_OutParm) && !Prop->HasAnyPropertyFlags(CPF_ConstParm))
-		{
-			const FString ErrorMsg = FString::Printf(TEXT("Parameter '%s' of function '%s' on object '%s' is an out/reference parameter, which is not currently supported"), *Prop->GetName(), *FunctionName.ToString(), *Object->GetName());
-			ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
-			return;
-		}
-		InParams.Add(Prop);
-	}
-
-	if (InParams.Num() != Request.args_size())
-	{
-		const FString ErrorMsg = FString::Printf(TEXT("Function '%s' on object '%s' takes %d parameter(s), but %d arg(s) were provided"), *FunctionName.ToString(), *Object->GetName(), InParams.Num(), Request.args_size());
+		const FString ErrorMsg = FString::Printf(TEXT("Function '%s' on object '%s' has %d parameters, but only functions with no arguments and void return type are currently supported"), *FunctionName.ToString(), *Object->GetName(), Function->NumParms);
 		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::FAILED_PRECONDITION, std::string(TCHAR_TO_UTF8(*ErrorMsg))));
 		return;
 	}
 
-	// Function->ParmsSize covers only the CPF_Parm properties (params + return value), not the
-	// object's own members, so a plain zeroed byte buffer sized to it is exactly what ProcessEvent
-	// expects as its Parms pointer -- same shape UFunction::Invoke uses internally.
-	TArray<uint8> ParamsBuffer;
-	ParamsBuffer.SetNumZeroed(Function->ParmsSize);
-	for (FProperty* Prop : InParams)
-	{
-		Prop->InitializeValue_InContainer(ParamsBuffer.GetData());
-	}
-
-	FString ConversionError;
-	for (int32 ArgIndex = 0; ArgIndex < InParams.Num(); ++ArgIndex)
-	{
-		FProperty* Prop = InParams[ArgIndex];
-		const FString ArgStr(UTF8_TO_TCHAR(Request.args(ArgIndex).c_str()));
-		void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(ParamsBuffer.GetData());
-
-		if (FBoolProperty* BoolProperty = CastField<FBoolProperty>(Prop))
-		{
-			BoolProperty->SetPropertyValue(ValuePtr, ArgStr.ToBool());
-		}
-		else if (FIntProperty* IntProperty = CastField<FIntProperty>(Prop))
-		{
-			IntProperty->SetPropertyValue(ValuePtr, FCString::Atoi(*ArgStr));
-		}
-		else if (FInt64Property* Int64Property = CastField<FInt64Property>(Prop))
-		{
-			Int64Property->SetPropertyValue(ValuePtr, FCString::Atoi64(*ArgStr));
-		}
-		else if (FFloatProperty* FloatProperty = CastField<FFloatProperty>(Prop))
-		{
-			FloatProperty->SetPropertyValue(ValuePtr, FCString::Atof(*ArgStr));
-		}
-		else if (FDoubleProperty* DoubleProperty = CastField<FDoubleProperty>(Prop))
-		{
-			DoubleProperty->SetPropertyValue(ValuePtr, FCString::Atod(*ArgStr));
-		}
-		else if (FStrProperty* StrProperty = CastField<FStrProperty>(Prop))
-		{
-			StrProperty->SetPropertyValue(ValuePtr, ArgStr);
-		}
-		else if (FNameProperty* NameProperty = CastField<FNameProperty>(Prop))
-		{
-			NameProperty->SetPropertyValue(ValuePtr, FName(*ArgStr));
-		}
-		else if (FEnumProperty* EnumProperty = CastField<FEnumProperty>(Prop))
-		{
-			const int64 EnumValue = GetEnumValueByAuthoredName(EnumProperty->GetEnum(), ArgStr);
-			if (EnumValue == INDEX_NONE)
-			{
-				ConversionError = FString::Printf(TEXT("Invalid value '%s' for enum parameter '%s' (enum '%s') of function '%s'"), *ArgStr, *Prop->GetName(), *EnumProperty->GetEnum()->GetName(), *FunctionName.ToString());
-				break;
-			}
-			EnumProperty->GetUnderlyingProperty()->SetIntPropertyValue(ValuePtr, EnumValue);
-		}
-		else
-		{
-			ConversionError = FString::Printf(TEXT("Parameter '%s' of function '%s' on object '%s' has type '%s', which is not a supported CallFunction argument type"), *Prop->GetName(), *FunctionName.ToString(), *Object->GetName(), *Prop->GetCPPType());
-			break;
-		}
-	}
-
-	if (!ConversionError.IsEmpty())
-	{
-		for (FProperty* Prop : InParams)
-		{
-			Prop->DestroyValue_InContainer(ParamsBuffer.GetData());
-		}
-		ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status(grpc::INVALID_ARGUMENT, std::string(TCHAR_TO_UTF8(*ConversionError))));
-		return;
-	}
-
-	Object->ProcessEvent(Function, ParamsBuffer.GetData());
-
-	for (FProperty* Prop : InParams)
-	{
-		Prop->DestroyValue_InContainer(ParamsBuffer.GetData());
-	}
+	Object->ProcessEvent(Function, nullptr);
 
 	ResponseContinuation.ExecuteIfBound(TempoCore::Empty(), grpc::Status_OK);
 }

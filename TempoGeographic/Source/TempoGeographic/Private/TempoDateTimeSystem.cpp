@@ -4,7 +4,7 @@
 
 #include "TempoGeographic.h"
 #include "Kismet/GameplayStatics.h"
-#include "Components/SkyLightComponent.h"
+#include "Components/SkyLightComponent.h" // [SERVE-PATCH SUP-G1]
 #include "Engine/World.h"
 #include "EngineUtils.h"
 
@@ -40,7 +40,7 @@ ATempoDateTimeSystem::ATempoDateTimeSystem()
 
 void ATempoDateTimeSystem::Tick(float DeltaSeconds)
 {
-	// Re-capture the sky at the START of the tick, using the sun position established by the PREVIOUS
+	// [SERVE-PATCH SUP-G1] Re-capture the sky at the START of the tick, using the sun position established by the PREVIOUS
 	// frame's broadcast. By now every DateTimeChangedEvent listener (including the TempoSunSky Blueprint
 	// that rotates the sun and owns the SkyLight) has already run, so the sun is final for that frame.
 	// This side-steps the undefined multicast-delegate invocation order: we never listen to the event,
