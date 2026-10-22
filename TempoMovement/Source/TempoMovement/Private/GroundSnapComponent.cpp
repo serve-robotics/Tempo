@@ -101,7 +101,9 @@ void UGroundSnapComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 		FHitResult GroundHit;
 		const FVector Start = TraceCorner + SearchDistance * FVector::UpVector;
 		const FVector End = TraceCorner - SearchDistance * FVector::UpVector;
-		GetWorld()->LineTraceSingleByChannel(GroundHit, Start, End, ECC_WorldStatic, Params);
+		// [SERVE-PATCH P14] Trace WorldStatic objects, not the WorldStatic channel: pawns and props block that
+		// channel, and the plane fit has no outlier rejection, so one corner on a pedestrian tipped the owner 45°.
+		GetWorld()->LineTraceSingleByObjectType(GroundHit, Start, End, FCollisionObjectQueryParams(ECC_WorldStatic), Params);
 		if (!GroundHit.bBlockingHit)
 		{
 			UE_LOG(LogTempoMovement, Warning, TEXT("Could not find ground below %s."), *GetName());
