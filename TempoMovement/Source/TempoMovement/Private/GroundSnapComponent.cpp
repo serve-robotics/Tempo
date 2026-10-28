@@ -98,18 +98,22 @@ void UGroundSnapComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	for (const FVector2D& CornerOffset : CornerOffsets)
 	{
 		const FVector TraceCorner = OwnerLocation + FVector(CornerOffset, 0.0);
-		FHitResult GroundHit;
 		const FVector Start = TraceCorner + SearchDistance * FVector::UpVector;
 		const FVector End = TraceCorner - SearchDistance * FVector::UpVector;
 		// [SERVE-PATCH P14] Trace WorldStatic objects, not the WorldStatic channel: pawns and props block that
 		// channel, and the plane fit has no outlier rejection, so one corner on a pedestrian tipped the owner 45°.
-		GetWorld()->LineTraceSingleByObjectType(GroundHit, Start, End, FCollisionObjectQueryParams(ECC_WorldStatic), Params);
-		if (!GroundHit.bBlockingHit)
+		// For the same reason, skip hits more than a step above the owner: WorldStatic props (a table top, a car
+		// hood) over one corner are not ground. A multi object query returns every hit, nearest first.
+		constexpr double MaxStepHeight = 30.0; // cm, above a curb, below a chair seat
+		TArray<FHitResult> Hits;
+		GetWorld()->LineTraceMultiByObjectType(Hits, Start, End, FCollisionObjectQueryParams(ECC_WorldStatic), Params);
+		const FHitResult* GroundHit = Hits.FindByPredicate([&](const FHitResult& Hit) { return Hit.Location.Z <= OwnerLocation.Z + MaxStepHeight; });
+		if (!GroundHit)
 		{
 			UE_LOG(LogTempoMovement, Warning, TEXT("Could not find ground below %s."), *GetName());
 			return;
 		}
-		GroundHits.Add(GroundHit);
+		GroundHits.Add(*GroundHit);
 	}
 
 	// Moments of the ground hits, in XY relative to the owner's origin and Z relative to its height, for the
