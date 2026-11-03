@@ -48,9 +48,10 @@ namespace
 		BuildContext.AddFragment<FMassZoneGraphLaneLocationFragment>();
 
 		UMassTrafficSubsystem* MassTrafficSubsystem = UWorld::GetSubsystem<UMassTrafficSubsystem>(&World);
-		check(MassTrafficSubsystem);
+		// [SERVE-PATCH P15] The editor inspects a failed template in a world with no MassTraffic subsystem; log, don't abort.
+		check(MassTrafficSubsystem || BuildContext.IsInspectingData());
 
-		if (PhysicsVehicleTemplateActor)
+		if (PhysicsVehicleTemplateActor && MassTrafficSubsystem)
 		{
 			// Extract physics setup from PhysicsVehicleTemplateActor into shared fragment
 			const FMassTrafficSimpleVehiclePhysicsTemplate* Template = MassTrafficSubsystem->GetOrExtractVehiclePhysicsTemplate(PhysicsVehicleTemplateActor);
